@@ -61,16 +61,27 @@ function Ensure-ChocoPackage([string]$Name) {
 }
 
 Write-Host "== Tesseract =="
-$tessExe = (Get-Command tesseract.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
-if (-not $tessExe) {
-    $exit = Ensure-ChocoPackage "tesseract"
-    if ($exit -ne 0) { throw "Chocolatey could not install Tesseract." }
-    $tessExe = (Get-Command tesseract.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
+# Use the Windows installer published from the Tesseract project release rather
+# than depending on Chocolatey's community repository at build time. The binary
+# is checksum-pinned so the build fails closed if the payload ever changes.
+$tessVersion = "5.5.3.20260724"
+$tessInstaller = Join-Path $env:RUNNER_TEMP "tesseract-ocr-w64-setup-$tessVersion.exe"
+$tessUrl = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-$tessVersion.exe"
+$tessExpectedSha256 = "bee9e3434bd94fd65387d9be28cd467a41f61b1275383b55b0f59a1331270ae4"
+Invoke-WebRequest $tessUrl -OutFile $tessInstaller
+$tessActualSha256 = (Get-FileHash $tessInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($tessActualSha256 -ne $tessExpectedSha256) {
+    throw "Tesseract installer checksum mismatch. Expected $tessExpectedSha256, got $tessActualSha256."
 }
-if (-not $tessExe -and (Test-Path "C:\Program Files\Tesseract-OCR\tesseract.exe")) {
-    $tessExe = "C:\Program Files\Tesseract-OCR\tesseract.exe"
+$tessInstallRoot = Join-Path $env:RUNNER_TEMP "FilesExtract-Tesseract"
+if (Test-Path $tessInstallRoot) { Remove-Item $tessInstallRoot -Recurse -Force }
+$process = Start-Process -FilePath $tessInstaller -ArgumentList "/S", "/D=$tessInstallRoot" -Wait -PassThru -NoNewWindow
+if ($process.ExitCode -ne 0) { throw "Tesseract installer failed with exit code $($process.ExitCode)." }
+$tessExe = Join-Path $tessInstallRoot "tesseract.exe"
+if (-not (Test-Path $tessExe)) {
+    $tessExe = Get-ChildItem $tessInstallRoot -Filter "tesseract.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
 }
-if (-not $tessExe) { throw "Tesseract executable was not found after installation." }
+if (-not $tessExe -or -not (Test-Path $tessExe)) { throw "Tesseract executable was not found after verified installation." }
 $tessRoot = Split-Path $tessExe -Parent
 $tessDest = Join-Path $tools "tesseract"
 Copy-Item $tessRoot $tessDest -Recurse -Force
@@ -134,6 +145,7 @@ $buildInfo = [ordered]@{
     source_commit = $commit
     build_time_utc = [DateTime]::UtcNow.ToString("o")
     embedded_python = $pyVersion
+    tesseract = $tessVersion
     offline_docling_models = @("layout", "tableformer")
     bundled_ocr_languages = @("ara", "eng")
 }
