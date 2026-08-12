@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from .errors import FilesExtractError
 from .output import write_output_package
 
 SUPPORTED_SUFFIXES = {".pdf", ".docx", ".docm", ".xlsx", ".xlsm", ".pptx", ".pptm", ".doc", ".xls", ".ppt"}
+_PASSWORD_ENV = "FILES_EXTRACT_PASSWORD"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,7 +36,13 @@ def build_parser() -> argparse.ArgumentParser:
     extract_p.add_argument("--max-archive-members", type=int, default=100000)
     extract_p.add_argument("--max-archive-member-mb", type=int, default=1024)
     extract_p.add_argument("--libreoffice-timeout", type=int, default=180, help="LibreOffice conversion timeout in seconds.")
-    extract_p.add_argument("--password", help="Password for an encrypted PDF. The password is never written to output metadata.")
+    extract_p.add_argument(
+        "--password",
+        help=(
+            "Password for an encrypted PDF or modern Office document. "
+            "The password is never written to output metadata."
+        ),
+    )
 
     batch_p = sub.add_parser("batch", help="Extract all supported files in a directory.")
     batch_p.add_argument("input", type=Path)
@@ -47,11 +55,26 @@ def build_parser() -> argparse.ArgumentParser:
     batch_p.add_argument("--max-archive-members", type=int, default=100000)
     batch_p.add_argument("--max-archive-member-mb", type=int, default=1024)
     batch_p.add_argument("--libreoffice-timeout", type=int, default=180, help="LibreOffice conversion timeout in seconds.")
-    batch_p.add_argument("--password", help="Password to try for encrypted PDFs in this batch.")
+    batch_p.add_argument(
+        "--password",
+        help="Password to try for encrypted PDFs or modern Office documents in this batch.",
+    )
 
     doctor_p = sub.add_parser("doctor", help="Report dependency/backend availability.")
     doctor_p.add_argument("--json", action="store_true")
     return parser
+
+
+def _password(args: argparse.Namespace) -> str | None:
+    """Resolve a document password without persisting it.
+
+    The environment path exists so the desktop launcher can pass secrets to its
+    private child process without exposing them in the process command line.
+    The public CLI continues to support --password for interactive use.
+    """
+
+    explicit = getattr(args, "password", None)
+    return explicit if explicit is not None else os.environ.get(_PASSWORD_ENV)
 
 
 def _engine(args: argparse.Namespace) -> ExtractionEngine:
@@ -62,7 +85,7 @@ def _engine(args: argparse.Namespace) -> ExtractionEngine:
         max_archive_members=int(getattr(args, "max_archive_members", 100000)),
         max_archive_single_member_bytes=int(getattr(args, "max_archive_member_mb", 1024)) * 1024 * 1024,
         libreoffice_timeout_seconds=int(getattr(args, "libreoffice_timeout", 180)),
-        pdf_password=getattr(args, "password", None),
+        pdf_password=_password(args),
     ))
 
 
@@ -73,7 +96,7 @@ def _extract_one(engine: ExtractionEngine, source: Path, output: Path, args: arg
         output_format=getattr(args, "format", "both"),
         json_indent=getattr(args, "json_indent", 2),
         extract_assets=not bool(getattr(args, "no_assets", False)),
-        pdf_password=getattr(args, "password", None),
+        pdf_password=_password(args),
     )
     print(f"Extracted: {source}")
     print(f"Type: {document.metadata.document_type}")
