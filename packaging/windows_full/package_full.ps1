@@ -20,15 +20,22 @@ $lines = Get-ChildItem $app -File -Recurse | Where-Object { $_.FullName -ne $man
 }
 $lines | Set-Content $manifestPath -Encoding ASCII
 
-$sevenZip = "C:\Program Files\7-Zip\7z.exe"
-if (-not (Test-Path $sevenZip)) {
-    & choco install 7zip -y --no-progress
-    if ($LASTEXITCODE -ne 0) { throw "Could not install 7-Zip." }
-}
+Write-Host "== Portable ZIP =="
+# Use the .NET ZIP implementation built into PowerShell/.NET instead of relying
+# on Chocolatey or a separately provisioned 7-Zip executable. ZipArchive emits
+# Zip64 automatically when archive size/member counts require it.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = Join-Path $repo "dist/FilesExtract-Full-Portable-v0.4.0-windows-x64.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
-& $sevenZip a -tzip -mx=7 $zip "$app\*"
-if ($LASTEXITCODE -ne 0) { throw "Portable ZIP creation failed." }
+[System.IO.Compression.ZipFile]::CreateFromDirectory(
+    $app,
+    $zip,
+    [System.IO.Compression.CompressionLevel]::Optimal,
+    $false
+)
+if (-not (Test-Path $zip) -or (Get-Item $zip).Length -le 0) {
+    throw "Portable ZIP creation failed."
+}
 
 Write-Host "== Inno Setup installer =="
 $isccCandidates = @(
@@ -37,11 +44,27 @@ $isccCandidates = @(
 )
 $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) {
-    & choco install innosetup -y --no-progress
-    if ($LASTEXITCODE -ne 0) { throw "Could not install Inno Setup." }
-    $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    # Install a checksum-pinned immutable official release into a private build
+    # directory. This is a build-time compiler only and is not included in the
+    # FilesExtract end-user product.
+    $innoVersion = "6.7.3"
+    $innoUrl = "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-$innoVersion.exe"
+    $innoExpectedSha256 = "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732"
+    $innoInstaller = Join-Path $env:RUNNER_TEMP "innosetup-$innoVersion.exe"
+    $innoRoot = Join-Path $env:RUNNER_TEMP "FilesExtract-InnoSetup"
+    Invoke-WebRequest $innoUrl -OutFile $innoInstaller
+    $innoActualSha256 = (Get-FileHash $innoInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($innoActualSha256 -ne $innoExpectedSha256) {
+        throw "Inno Setup checksum mismatch. Expected $innoExpectedSha256, got $innoActualSha256."
+    }
+    if (Test-Path $innoRoot) { Remove-Item $innoRoot -Recurse -Force }
+    $innoProcess = Start-Process -FilePath $innoInstaller -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=$innoRoot" -Wait -PassThru -NoNewWindow
+    if ($innoProcess.ExitCode -ne 0) {
+        throw "Inno Setup installer failed with exit code $($innoProcess.ExitCode)."
+    }
+    $iscc = Join-Path $innoRoot "ISCC.exe"
 }
-if (-not $iscc) { throw "ISCC.exe was not found." }
+if (-not $iscc -or -not (Test-Path $iscc)) { throw "ISCC.exe was not found." }
 & $iscc "/DSourceDir=$app" "packaging/windows_full/FilesExtract.iss"
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed." }
 
