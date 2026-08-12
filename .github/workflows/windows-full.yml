@@ -2,8 +2,12 @@ name: Windows Full Product
 
 on:
   push:
-    branches: ["release/windows-full-v0.4"]
+    branches: ["release/windows-full-v0.4", "main"]
   workflow_dispatch:
+
+concurrency:
+  group: windows-full-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   windows-full:
