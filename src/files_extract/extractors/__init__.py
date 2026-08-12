@@ -1,6 +1,6 @@
 from .base import BaseExtractor
 from .docx import DocxExtractor
-from .pdf import PdfExtractor
+from .pdf_portable import PdfExtractor
 from .pptx import PptxExtractor
 from .xlsx import XlsxExtractor
 
