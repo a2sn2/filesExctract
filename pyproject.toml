@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "files-extract"
+version = "0.1.0"
+description = "Local-first structured extraction for PDF, Word, Excel, and PowerPoint files."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "ALHassan ALShami" }
+]
+dependencies = [
+  "openpyxl>=3.1,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+]
+
+[project.scripts]
+files-extract = "files_extract.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/files_extract"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
