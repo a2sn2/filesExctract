@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 full = [
-  "docling[rapidocr]>=2.115,<3",
+  "docling[rapidocr,onnxruntime]>=2.115,<3",
 ]
 dev = [
   "pytest>=8,<10",
