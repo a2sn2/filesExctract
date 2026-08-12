@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "files-extract"
+version = "0.3.0"
+description = "Local-first structured extraction for PDF, Word, Excel, and PowerPoint files."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "ALHassan ALShami" }]
+dependencies = [
+  "openpyxl>=3.1.5,<4",
+  "python-docx>=1.2,<2",
+  "python-pptx>=1.0.2,<2",
+  "pypdf>=5.9,<7",
+]
+
+[project.optional-dependencies]
+full = [
+  "docling[rapidocr]>=2.115,<3",
+]
+dev = [
+  "pytest>=8,<10",
+  "pytest-cov>=5,<8",
+  "reportlab>=4,<5",
+  "Pillow>=10,<13",
+  "build>=1.2,<2",
+]
+
+[project.scripts]
+files-extract = "files_extract.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/files_extract"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+  "integration: requires external programs such as LibreOffice",
+  "docling: requires the optional full Docling/OCR backend",
+]
