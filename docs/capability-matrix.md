@@ -18,11 +18,11 @@ Legend: **Yes** = normalized, **Asset** = raw content preserved, **Partial** = d
 | OLE/embedded packages | Attachments Asset | Asset + Partial semantics | Asset + Partial semantics | Asset + Partial semantics |
 | VBA / ActiveX | n/a | Asset + detected | Asset + detected | Asset + detected |
 | Forms | Yes PDF fields | Field instructions retained | Data validation rules | n/a |
-| OCR | Docling; Tesseract ara+eng preferred when installed | renderer path is not OCR by default | n/a | n/a |
+| OCR | Docling + bundled Tesseract ara/eng in Windows Full | renderer path is not OCR by default | n/a | n/a |
 | Legacy binary | n/a | DOC via LibreOffice | XLS via LibreOffice | PPT via LibreOffice |
-| Encrypted input | PDF password supported | encrypted modern Office detected only | encrypted modern Office detected only | encrypted modern Office detected only |
+| Encrypted input | Yes, password | Yes, password via msoffcrypto | Yes, password via msoffcrypto | Yes, password via msoffcrypto |
 
-## Known boundaries in v0.3.0
+## Known semantic boundaries in v0.4.0
 
 The engine does not claim semantic interpretation of every proprietary rich object. In particular, SmartArt graphs, VBA logic, ActiveX behavior, OLE application semantics, Excel pivot/slicer/query behavior and some chart models are preserved/detected but not fully normalized. This is explicit in `unsupported_objects` and raw assets rather than silently omitted.
 
