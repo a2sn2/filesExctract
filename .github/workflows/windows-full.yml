@@ -34,9 +34,21 @@ jobs:
         shell: pwsh
         run: python packaging/windows_full/smoke_full.py release/windows-full
 
-      - name: Build installer and portable archive
+      - name: Build integrity manifest
         shell: pwsh
-        run: ./packaging/windows_full/package_full.ps1
+        run: ./packaging/windows_full/package_full.ps1 -Phase Manifest
+
+      - name: Build portable ZIP
+        shell: pwsh
+        run: ./packaging/windows_full/package_full.ps1 -Phase Portable
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: ./packaging/windows_full/package_full.ps1 -Phase Installer
+
+      - name: Finalize Windows package checksums
+        shell: pwsh
+        run: ./packaging/windows_full/package_full.ps1 -Phase Finalize
 
       - name: Silent-install final installer
         shell: pwsh
