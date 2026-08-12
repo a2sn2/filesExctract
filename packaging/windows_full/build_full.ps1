@@ -55,15 +55,9 @@ Write-Host "== Offline Docling models =="
 & docling-tools models download layout tableformer -o $models
 if ($LASTEXITCODE -ne 0) { throw "Failed to prefetch Docling layout/table models." }
 
-function Ensure-ChocoPackage([string]$Name) {
-    & choco install $Name -y --no-progress
-    return $LASTEXITCODE
-}
-
 Write-Host "== Tesseract =="
-# Use the Windows installer published from the Tesseract project release rather
-# than depending on Chocolatey's community repository at build time. The binary
-# is checksum-pinned so the build fails closed if the payload ever changes.
+# Use a checksum-pinned Windows installer rather than a package manager so the
+# resulting product is reproducible and independent from Chocolatey state.
 $tessVersion = "5.5.3.20260724"
 $tessInstaller = Join-Path $env:RUNNER_TEMP "tesseract-ocr-w64-setup-$tessVersion.exe"
 $tessUrl = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-$tessVersion.exe"
@@ -92,24 +86,31 @@ Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast
 Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tesseract/main/LICENSE" -OutFile (Join-Path $app "LICENSE-TESSERACT.txt")
 
 Write-Host "== LibreOffice =="
-$loExe = $null
-$loCandidates = @(
-    "C:\Program Files\LibreOffice\program\soffice.exe",
-    "C:\Program Files (x86)\LibreOffice\program\soffice.exe"
-)
-foreach ($candidate in $loCandidates) { if (Test-Path $candidate) { $loExe = $candidate; break } }
-if (-not $loExe) {
-    $exit = Ensure-ChocoPackage "libreoffice-fresh"
-    if ($exit -ne 0) {
-        $exit = Ensure-ChocoPackage "libreoffice"
-        if ($exit -ne 0) { throw "Chocolatey could not install LibreOffice." }
-    }
-    foreach ($candidate in $loCandidates) { if (Test-Path $candidate) { $loExe = $candidate; break } }
+# The official TDF mirror list publishes both the exact MSI filename and its
+# SHA-256. Administrative extraction keeps LibreOffice private to FilesExtract;
+# the target PC does not need LibreOffice installed globally.
+$loVersion = "26.2.5"
+$loMsi = Join-Path $env:RUNNER_TEMP "LibreOffice_${loVersion}_Win_x86-64.msi"
+$loUrl = "https://download.documentfoundation.org/libreoffice/stable/$loVersion/win/x86_64/LibreOffice_${loVersion}_Win_x86-64.msi"
+$loExpectedSha256 = "f15ba07bfcb0186986cf3171063506f5d207c11f8cc051ba0d135209e9e915f9"
+Invoke-WebRequest $loUrl -OutFile $loMsi -MaximumRedirection 10
+$loActualSha256 = (Get-FileHash $loMsi -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($loActualSha256 -ne $loExpectedSha256) {
+    throw "LibreOffice MSI checksum mismatch. Expected $loExpectedSha256, got $loActualSha256."
 }
-if (-not $loExe) { throw "LibreOffice was not found after installation." }
+$loAdminRoot = Join-Path $env:RUNNER_TEMP "FilesExtract-LibreOffice-Admin"
+if (Test-Path $loAdminRoot) { Remove-Item $loAdminRoot -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $loAdminRoot | Out-Null
+$loArgs = @("/a", $loMsi, "/qn", "/norestart", "TARGETDIR=$loAdminRoot")
+$loProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList $loArgs -Wait -PassThru -NoNewWindow
+if ($loProcess.ExitCode -ne 0) { throw "LibreOffice administrative extraction failed with exit code $($loProcess.ExitCode)." }
+$loExe = Get-ChildItem $loAdminRoot -Filter "soffice.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+if (-not $loExe -or -not (Test-Path $loExe)) { throw "LibreOffice soffice.exe was not found in the administratively extracted MSI." }
 $loRoot = Split-Path (Split-Path $loExe -Parent) -Parent
 $loDest = Join-Path $tools "libreoffice"
 Copy-Item $loRoot $loDest -Recurse -Force
+$bundledSoffice = Join-Path $loDest "program\soffice.exe"
+if (-not (Test-Path $bundledSoffice)) { throw "Bundled LibreOffice layout is invalid: program\soffice.exe is missing." }
 $loLicense = Get-ChildItem $loRoot -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(license|copying)' } | Select-Object -First 1
 if ($loLicense) { Copy-Item $loLicense.FullName (Join-Path $app "LICENSE-LIBREOFFICE.txt") -Force }
 
@@ -146,6 +147,7 @@ $buildInfo = [ordered]@{
     build_time_utc = [DateTime]::UtcNow.ToString("o")
     embedded_python = $pyVersion
     tesseract = $tessVersion
+    libreoffice = $loVersion
     offline_docling_models = @("layout", "tableformer")
     bundled_ocr_languages = @("ara", "eng")
 }
