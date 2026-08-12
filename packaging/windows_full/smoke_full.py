@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -119,6 +118,9 @@ def assert_primary_docling(payload: dict) -> None:
     assert pdf.get("primary_backend") == "docling", pdf
     ocr = pdf.get("ocr", {})
     assert ocr.get("enabled") is True, ocr
+    layout = pdf.get("layout_engine", {})
+    assert layout.get("runtime") == "onnxruntime", layout
+    assert layout.get("requires_runtime_compiler") is False, layout
 
 
 def libreoffice_convert(app: Path, source: Path, extension: str, out: Path) -> Path:
@@ -176,7 +178,7 @@ def main() -> int:
         word_payload = json_payload(output / "docx" / "document.json")
         pagination = word_payload.get("metadata", {}).get("properties", {}).get("word", {}).get("pagination", {})
         assert pagination, "Word rendered pagination metadata missing"
-        assert int(pagination.get("page_count") or 0) >= 2, pagination
+        assert int(pagination.get("rendered_page_count") or 0) >= 2, pagination
 
         assert_primary_docling(json_payload(output / "pdf" / "document.json"))
 
@@ -206,7 +208,6 @@ def main() -> int:
             run_backend(app, "extract", str(source), "-o", str(dest))
             assert (dest / "document.json").is_file()
 
-        # Verify the GUI executable's command-line bridge as well as the backend.
         launcher = subprocess.run(
             [str(app / "FilesExtract.exe"), "--version"],
             env=runtime_env(app),
