@@ -1,6 +1,6 @@
 # Release checklist
 
-A release candidate is acceptable only when all of the following are true.
+Version `0.3.0` is release-ready when all checks below pass on the release commit and again on `main` after merge.
 
 ## Functional
 
@@ -31,8 +31,8 @@ A release candidate is acceptable only when all of the following are true.
 - [x] Python 3.13 matrix
 - [x] package build
 - [x] LibreOffice integration tests
-- [ ] real Docling PDF smoke on clean CI
-- [ ] image-only OCR smoke on clean CI
-- [ ] Docker image build + doctor smoke
+- [x] real Docling PDF smoke on clean CI
+- [x] image-only OCR smoke on clean CI
+- [x] Docker image build + doctor smoke
 
-The last three boxes are checked only after the corresponding GitHub Actions jobs succeed for the release commit.
+The checklist records the capabilities validated before the final release-doc commit. The same full GitHub Actions workflow must remain green for this commit and for the resulting `main` merge commit before the release is handed off for real-world user testing.

@@ -43,8 +43,6 @@ sample_extracted/
 ```bash
 git clone https://github.com/a2sn2/filesExctract.git
 cd filesExctract
-git switch feat/foundation
-
 python -m venv .venv
 ```
 
