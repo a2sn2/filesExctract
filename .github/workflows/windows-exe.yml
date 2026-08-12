@@ -1,0 +1,107 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: ["build/windows-exe"]
+  workflow_dispatch:
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pyinstaller reportlab
+
+      - name: Build standalone executable
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --console `
+            --name files-extract `
+            --paths src `
+            --collect-all openpyxl `
+            --collect-all docx `
+            --collect-all pptx `
+            --collect-all pypdf `
+            --collect-all lxml `
+            --collect-all PIL `
+            packaging/windows_entry.py
+
+      - name: Smoke test EXE
+        shell: pwsh
+        run: |
+          python packaging/smoke_windows.py dist/files-extract.exe
+
+      - name: Prepare portable package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item dist/files-extract.exe release/files-extract.exe
+          @"
+          files-extract v0.3.0 - Windows x64 portable executable
+
+          No Python installation or project source code is required.
+
+          Quick checks:
+            files-extract.exe --version
+            files-extract.exe doctor --json
+
+          Examples:
+            files-extract.exe extract "C:\path\report.xlsx"
+            files-extract.exe extract "C:\path\document.docx"
+            files-extract.exe extract "C:\path\slides.pptx"
+            files-extract.exe extract "C:\path\document.pdf"
+            files-extract.exe batch "C:\path\documents" -o "C:\path\output" --recursive
+
+          Included in this standalone EXE:
+            - XLSX/XLSM extraction
+            - DOCX/DOCM extraction
+            - PPTX/PPTM extraction
+            - text-based PDF extraction through pypdf
+            - JSON/Markdown output, assets, manifests and batch processing
+
+          Optional external backends are NOT embedded in this small standalone EXE:
+            - LibreOffice: needed for legacy DOC/XLS/PPT and rendered Word pagination
+            - Tesseract/Docling full OCR backend: not embedded in this build
+
+          Run `files-extract.exe doctor --json` to see what optional tools are available on the test PC.
+
+          Build source commit: $env:GITHUB_SHA
+          "@ | Set-Content -Encoding UTF8 release/README-WINDOWS.txt
+
+          $hash = (Get-FileHash release/files-extract.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  files-extract.exe" | Set-Content -Encoding ASCII release/SHA256SUMS.txt
+          Compress-Archive -Path release/* -DestinationPath files-extract-windows-x64-v0.3.0.zip -Force
+
+      - name: Final packaged EXE smoke
+        shell: pwsh
+        run: |
+          .\release\files-extract.exe --version
+          .\release\files-extract.exe doctor --json
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: files-extract-windows-x64-v0.3.0
+          path: |
+            files-extract-windows-x64-v0.3.0.zip
+            release/files-extract.exe
+            release/README-WINDOWS.txt
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
