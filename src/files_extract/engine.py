@@ -7,7 +7,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from .detection import DetectedFileType, detect_file_type
-from .errors import InvalidInputFileError, UnsupportedFileTypeError
+from .errors import ExtractionFailedError, InvalidInputFileError
 from .libreoffice import converted_temp, find_libreoffice
 from .models import (
     CanonicalDocument,
@@ -17,6 +17,7 @@ from .models import (
     SourceReference,
     UnitKind,
 )
+from .office_crypto import decrypted_office_temp
 from .registry import ExtractorRegistry
 from .security import ArchiveSafetyLimits, validate_zip_archive
 from .validation import validate_document
@@ -38,6 +39,8 @@ class ExtractionOptions:
     max_archive_uncompressed_bytes: int = 2 * 1024 * 1024 * 1024
     max_archive_single_member_bytes: int = 1024 * 1024 * 1024
     libreoffice_timeout_seconds: int = 180
+    # Kept under the existing field name for API compatibility. v0.4 uses this
+    # password for encrypted PDFs and encrypted modern Office documents.
     pdf_password: str | None = None
 
 
@@ -49,6 +52,13 @@ class ExtractionEngine:
     def inspect(self, path: str | Path) -> DetectedFileType:
         return detect_file_type(path)
 
+    def _archive_limits(self) -> ArchiveSafetyLimits:
+        return ArchiveSafetyLimits(
+            max_members=self.options.max_archive_members,
+            max_uncompressed_bytes=self.options.max_archive_uncompressed_bytes,
+            max_single_member_bytes=self.options.max_archive_single_member_bytes,
+        )
+
     def extract(self, path: str | Path) -> CanonicalDocument:
         source = Path(path).expanduser().resolve()
         detected = detect_file_type(source)
@@ -57,22 +67,16 @@ class ExtractionEngine:
             raise InvalidInputFileError(
                 f"Input file is {size} bytes, exceeding the configured {self.options.max_file_size_bytes} byte limit."
             )
+
         if detected.is_encrypted_office:
-            raise UnsupportedFileTypeError(
-                "Password-protected modern Office documents are detected but not decrypted yet. "
-                "Decrypt the file in Office/LibreOffice first, then run files-extract again."
-            )
+            document = self._extract_encrypted_office(source, detected)
+            self._ensure_provenance(document)
+            validate_document(document)
+            return document
 
         archive_stats: dict[str, int] | None = None
         if detected.document_type in {"docx", "docm", "xlsx", "xlsm", "pptx", "pptm"}:
-            archive_stats = validate_zip_archive(
-                source,
-                ArchiveSafetyLimits(
-                    max_members=self.options.max_archive_members,
-                    max_uncompressed_bytes=self.options.max_archive_uncompressed_bytes,
-                    max_single_member_bytes=self.options.max_archive_single_member_bytes,
-                ),
-            )
+            archive_stats = validate_zip_archive(source, self._archive_limits())
 
         if detected.is_legacy_office:
             document = self._extract_legacy(source, detected)
@@ -86,6 +90,61 @@ class ExtractionEngine:
         self._ensure_provenance(document)
         validate_document(document)
         return document
+
+    def _extract_encrypted_office(
+        self,
+        source: Path,
+        detected: DetectedFileType,
+    ) -> CanonicalDocument:
+        password = self.options.pdf_password
+        if not password:
+            raise ExtractionFailedError(
+                "The Office document is encrypted and no password was supplied. "
+                "Use --password or enter the password in the desktop application."
+            )
+
+        with decrypted_office_temp(
+            source,
+            password,
+            extension=detected.extension,
+        ) as decrypted:
+            decrypted_type = detect_file_type(decrypted)
+            if decrypted_type.document_type not in {
+                "docx", "docm", "xlsx", "xlsm", "pptx", "pptm"
+            }:
+                raise ExtractionFailedError(
+                    "The decrypted Office payload is not a supported modern Office document."
+                )
+
+            archive_stats = validate_zip_archive(decrypted, self._archive_limits())
+            document = self._extract_native(
+                decrypted,
+                decrypted_type,
+                original_source=source,
+            )
+            source_meta = document.metadata.properties.setdefault("source", {})
+            source_meta["is_encrypted_office"] = True
+            source_meta["archive"] = archive_stats
+            document.metadata.properties["security"] = {
+                "encrypted_source": True,
+                "decrypted_for_extraction": True,
+                "decryption_backend": "msoffcrypto-tool",
+                "password_persisted": False,
+            }
+            document.warnings.append(
+                ExtractionWarning(
+                    code="office.encrypted.decrypted",
+                    message=(
+                        "The encrypted Office source was decrypted into an isolated "
+                        "temporary file for extraction. The password and decrypted "
+                        "intermediate are not written to the output package."
+                    ),
+                    severity=Severity.INFO,
+                )
+            )
+            if decrypted_type.document_type in {"docx", "docm"}:
+                self._augment_word_pagination(decrypted, document)
+            return document
 
     def _metadata(
         self,
@@ -130,14 +189,7 @@ class ExtractionEngine:
             raise InvalidInputFileError(f"Cannot determine legacy Office family for: {source.name}")
         with converted_temp(source, target, timeout=self.options.libreoffice_timeout_seconds) as converted:
             converted_type = detect_file_type(converted)
-            validate_zip_archive(
-                converted,
-                ArchiveSafetyLimits(
-                    max_members=self.options.max_archive_members,
-                    max_uncompressed_bytes=self.options.max_archive_uncompressed_bytes,
-                    max_single_member_bytes=self.options.max_archive_single_member_bytes,
-                ),
-            )
+            validate_zip_archive(converted, self._archive_limits())
             document = self._extract_native(converted, converted_type, original_source=source)
             document.metadata.document_type = detected.document_type
             document.metadata.extension = detected.extension
