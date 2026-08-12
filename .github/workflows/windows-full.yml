@@ -1,0 +1,59 @@
+name: Windows Full Product
+
+on:
+  push:
+    branches: ["release/windows-full-v0.4"]
+  workflow_dispatch:
+
+jobs:
+  windows-full:
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build self-contained Windows product
+        shell: pwsh
+        run: ./packaging/windows_full/build_full.ps1
+
+      - name: Smoke test portable full product
+        shell: pwsh
+        run: python packaging/windows_full/smoke_full.py release/windows-full
+
+      - name: Build installer and portable archive
+        shell: pwsh
+        run: ./packaging/windows_full/package_full.ps1
+
+      - name: Silent-install final installer
+        shell: pwsh
+        run: |
+          $install = Join-Path $env:RUNNER_TEMP "FilesExtractInstalled"
+          Start-Process -FilePath "dist/FilesExtract-Full-Setup-v0.4.0.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$install" -Wait -NoNewWindow
+          if (-not (Test-Path (Join-Path $install "FilesExtract.exe"))) { throw "Installer did not create FilesExtract.exe" }
+          "FILES_EXTRACT_INSTALLED=$install" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Smoke test installed product
+        shell: pwsh
+        run: python packaging/windows_full/smoke_full.py "$env:FILES_EXTRACT_INSTALLED"
+
+      - name: Upload Windows full product
+        uses: actions/upload-artifact@v4
+        with:
+          name: FilesExtract-Full-v0.4.0-windows-x64
+          path: |
+            dist/FilesExtract-Full-Setup-v0.4.0.exe
+            dist/FilesExtract-Full-Portable-v0.4.0-windows-x64.zip
+            dist/SHA256SUMS-WINDOWS-FULL.txt
+            dist/build-info-windows-full.json
+          if-no-files-found: error
+          retention-days: 30
