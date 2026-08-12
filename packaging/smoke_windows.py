@@ -74,9 +74,9 @@ def main() -> int:
         c.save()
 
         expected = {
-            xlsx: "excel",
-            docx: "word",
-            pptx: "powerpoint",
+            xlsx: "xlsx",
+            docx: "docx",
+            pptx: "pptx",
             pdf: "pdf",
         }
 
