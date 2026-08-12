@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from docx import Document
+from msoffcrypto.format.ooxml import OOXMLFile
 from openpyxl import Workbook
 from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
@@ -58,6 +59,10 @@ def create_fixtures(root: Path) -> dict[str, Path]:
     wb.create_sheet("Hidden").sheet_state = "hidden"
     wb.save(xlsx)
 
+    encrypted_xlsx = root / "protected.xlsx"
+    with xlsx.open("rb") as source, encrypted_xlsx.open("wb") as destination:
+        OOXMLFile(source).encrypt("office-test-password", destination)
+
     docx = root / "sample.docx"
     doc = Document()
     doc.add_heading("Windows full smoke", level=1)
@@ -106,7 +111,15 @@ def create_fixtures(root: Path) -> dict[str, Path]:
     with encrypted.open("wb") as handle:
         writer.write(handle)
 
-    return {"xlsx": xlsx, "docx": docx, "pptx": pptx, "pdf": pdf, "scanned": scanned, "encrypted": encrypted}
+    return {
+        "xlsx": xlsx,
+        "encrypted_xlsx": encrypted_xlsx,
+        "docx": docx,
+        "pptx": pptx,
+        "pdf": pdf,
+        "scanned": scanned,
+        "encrypted": encrypted,
+    }
 
 
 def json_payload(path: Path) -> dict:
@@ -153,7 +166,9 @@ def main() -> int:
     assert doctor["dependencies"]["python-docx"]["available"] is True
     assert doctor["dependencies"]["python-pptx"]["available"] is True
     assert doctor["dependencies"]["pypdf"]["available"] is True
+    assert doctor["dependencies"]["msoffcrypto-tool"]["available"] is True
     assert doctor["dependencies"]["docling"]["available"] is True
+    assert doctor["dependencies"]["onnxruntime"]["available"] is True
     lo_path = Path(doctor["external_tools"]["libreoffice"]["path"]).resolve()
     tess_path = Path(doctor["external_tools"]["tesseract"]["path"]).resolve()
     assert app in lo_path.parents, lo_path
@@ -196,6 +211,22 @@ def main() -> int:
         encrypted_out = output / "encrypted"
         run_backend(app, "extract", str(fixtures["encrypted"]), "-o", str(encrypted_out), "--password", "secret-test-password")
         assert (encrypted_out / "document.json").is_file()
+
+        encrypted_office_out = output / "encrypted-office"
+        run_backend(
+            app,
+            "extract",
+            str(fixtures["encrypted_xlsx"]),
+            "-o",
+            str(encrypted_office_out),
+            "--password",
+            "office-test-password",
+        )
+        encrypted_office_payload = json_payload(encrypted_office_out / "document.json")
+        security = encrypted_office_payload.get("metadata", {}).get("properties", {}).get("security", {})
+        assert security.get("encrypted_source") is True, security
+        assert security.get("decrypted_for_extraction") is True, security
+        assert security.get("password_persisted") is False, security
 
         legacy_dir = root / "legacy"
         legacy = {
