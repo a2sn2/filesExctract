@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "files-extract"
-version = "0.3.0"
+version = "0.4.0"
 description = "Local-first structured extraction for PDF, Word, Excel, and PowerPoint files."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,8 +23,8 @@ full = [
 dev = [
   "pytest>=8,<10",
   "pytest-cov>=5,<8",
-  "reportlab>=4,<5",
-  "Pillow>=10,<13",
+  "reportlab>=4,<6",
+  "Pillow>=10,<14",
   "build>=1.2,<2",
 ]
 
