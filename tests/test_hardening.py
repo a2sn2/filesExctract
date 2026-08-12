@@ -9,7 +9,7 @@ import pytest
 from files_extract.cli import main
 from files_extract.detection import OLE_SIGNATURE, detect_file_type
 from files_extract.engine import ExtractionEngine, ExtractionOptions
-from files_extract.errors import ExtractionFailedError, InvalidInputFileError, UnsupportedFileTypeError
+from files_extract.errors import ExtractionFailedError, InvalidInputFileError
 from files_extract.output import write_output_package
 
 
@@ -17,6 +17,20 @@ def test_file_size_limit_is_enforced(xlsx_file: Path) -> None:
     engine = ExtractionEngine(options=ExtractionOptions(render_word_pages=False, max_file_size_bytes=1))
     with pytest.raises(InvalidInputFileError):
         engine.extract(xlsx_file)
+
+
+def test_archive_limits_reflect_engine_options() -> None:
+    engine = ExtractionEngine(
+        options=ExtractionOptions(
+            max_archive_members=7,
+            max_archive_uncompressed_bytes=11,
+            max_archive_single_member_bytes=13,
+        )
+    )
+    limits = engine._archive_limits()
+    assert limits.max_members == 7
+    assert limits.max_uncompressed_bytes == 11
+    assert limits.max_single_member_bytes == 13
 
 
 def test_ooxml_uncompressed_archive_limit_is_enforced(xlsx_file: Path) -> None:
@@ -38,13 +52,13 @@ def test_macro_detection_uses_package_content_not_filename(xlsx_file: Path, tmp_
     assert detected.is_macro_enabled is True
 
 
-def test_encrypted_modern_office_container_is_detected_and_rejected_clearly(tmp_path: Path) -> None:
+def test_encrypted_modern_office_container_is_detected_and_requires_password(tmp_path: Path) -> None:
     path = tmp_path / "protected.docx"
     path.write_bytes(OLE_SIGNATURE + b"EncryptedPackage placeholder")
     detected = detect_file_type(path)
     assert detected.document_type == "encrypted_office"
     assert detected.is_encrypted_office is True
-    with pytest.raises(UnsupportedFileTypeError, match="Password-protected modern Office"):
+    with pytest.raises(ExtractionFailedError, match="no password"):
         ExtractionEngine().extract(path)
 
 
