@@ -52,7 +52,14 @@ python -m pip install --upgrade --target $sitePackages ".[full]"
 if ($LASTEXITCODE -ne 0) { throw "Failed to populate the embedded Python runtime." }
 
 # Record the exact Python distributions that landed in the private runtime.
-$freezeCode = "import importlib.metadata as m; rows=sorted({f'{(d.metadata.get('Name') or d.metadata.get('Summary') or 'unknown')}=={d.version}' for d in m.distributions()}); print(chr(10).join(rows))"
+$freezeCode = @'
+import importlib.metadata as m
+rows = []
+for d in m.distributions():
+    name = d.metadata.get("Name") or d.metadata.get("Summary") or "unknown"
+    rows.append(name + "==" + d.version)
+print("\n".join(sorted(set(rows), key=str.lower)))
+'@
 $freezeOutput = & (Join-Path $pythonDir "python.exe") -c $freezeCode
 if ($LASTEXITCODE -ne 0) { throw "Could not enumerate the embedded Python runtime." }
 $freezeOutput | Set-Content -Path (Join-Path $app "runtime-freeze.txt") -Encoding UTF8
