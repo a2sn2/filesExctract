@@ -37,7 +37,7 @@ internal static class Backend
     public static string Root => Path.GetFullPath(AppContext.BaseDirectory);
     public static string Python => Path.Combine(Root, "runtime", "python", "python.exe");
 
-    public static ProcessStartInfo CreateStartInfo(IEnumerable<string> args)
+    public static ProcessStartInfo CreateStartInfo(IEnumerable<string> args, string? password = null)
     {
         if (!File.Exists(Python))
             throw new FileNotFoundException("The bundled Python runtime is missing.", Python);
@@ -69,12 +69,16 @@ internal static class Backend
         psi.Environment["TRANSFORMERS_OFFLINE"] = "1";
         psi.Environment["HF_HUB_DISABLE_TELEMETRY"] = "1";
         psi.Environment["PYTHONUTF8"] = "1";
+        if (!string.IsNullOrWhiteSpace(password))
+            psi.Environment["FILES_EXTRACT_PASSWORD"] = password;
+        else
+            psi.Environment.Remove("FILES_EXTRACT_PASSWORD");
         return psi;
     }
 
-    public static async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(IEnumerable<string> args)
+    public static async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(IEnumerable<string> args, string? password = null)
     {
-        using var process = new Process { StartInfo = CreateStartInfo(args) };
+        using var process = new Process { StartInfo = CreateStartInfo(args, password) };
         process.Start();
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
@@ -146,7 +150,7 @@ internal sealed class MainForm : Form
         var options = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
         options.Controls.Add(_assets);
         options.Controls.Add(_pagination);
-        options.Controls.Add(new Label { Text = "PDF password (optional)", AutoSize = true, Padding = new Padding(18, 6, 0, 0) });
+        options.Controls.Add(new Label { Text = "Document password (optional)", AutoSize = true, Padding = new Padding(18, 6, 0, 0) });
         _password.Width = 180;
         options.Controls.Add(_password);
         root.Controls.Add(options);
@@ -286,14 +290,9 @@ internal sealed class MainForm : Form
                 var args = new List<string> { "extract", source, "-o", destination };
                 if (!_assets.Checked) args.Add("--no-assets");
                 if (!_pagination.Checked) args.Add("--no-render-word-pages");
-                if (!string.IsNullOrWhiteSpace(_password.Text))
-                {
-                    args.Add("--password");
-                    args.Add(_password.Text);
-                }
 
                 Log($"> Extracting {source}");
-                var result = await Backend.RunAsync(args);
+                var result = await Backend.RunAsync(args, _password.Text);
                 Log(result.Stdout);
                 Log(result.Stderr);
                 if (result.ExitCode != 0) failed++;
