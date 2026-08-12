@@ -25,6 +25,7 @@ def write_output_package(
     output_format: str = "both",
     json_indent: int = 2,
     extract_assets: bool = True,
+    pdf_password: str | None = None,
 ) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
@@ -36,7 +37,9 @@ def write_output_package(
         p = output_dir / "document.md"
         p.write_text(render_markdown(document), encoding="utf-8")
         written.append(p)
-    asset_paths = materialize_assets(source, document, output_dir) if extract_assets else []
+    asset_paths = materialize_assets(
+        source, document, output_dir, pdf_password=pdf_password
+    ) if extract_assets else []
     written.extend(asset_paths)
     manifest = {
         "schema_version": document.schema_version,
@@ -51,7 +54,12 @@ def write_output_package(
             "warnings": len(document.warnings),
             "unsupported_objects": len(document.unsupported_objects),
             "assets_declared": len(document.assets),
+            "assets_requested": bool(extract_assets),
             "assets_written": len(asset_paths),
+            "assets_failed": max(0, len(document.assets) - len(asset_paths)) if extract_assets else 0,
+            "potentially_active_assets": sum(
+                1 for asset in document.assets if asset.metadata.get("potentially_active_content")
+            ),
         },
         "files": [],
     }

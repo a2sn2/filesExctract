@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import zipfile
 from pathlib import Path
 from typing import Any, Iterable
@@ -91,6 +92,36 @@ def _shape_geometry(shape: Any) -> dict[str, Any]:
         "height": _length(_safe_attr(shape, "height")),
         "rotation": _safe_attr(shape, "rotation"),
     }
+
+
+def _shape_accessibility(shape: Any) -> dict[str, Any]:
+    try:
+        element = shape._element
+        for node in element.iter():
+            if str(node.tag).endswith("}cNvPr"):
+                return {
+                    "title": node.get("title"),
+                    "description": node.get("descr"),
+                    "name": node.get("name"),
+                }
+    except Exception:
+        pass
+    return {"title": None, "description": None, "name": None}
+
+
+def _shape_text_snapshot(shapes: Iterable[Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for index, shape in enumerate(shapes, start=1):
+        text, _ = _shape_text(shape)
+        accessibility = _shape_accessibility(shape)
+        if text or accessibility.get("description") or accessibility.get("title"):
+            result.append({
+                "index": index,
+                "name": _safe_attr(shape, "name"),
+                "text": text,
+                "accessibility": accessibility,
+            })
+    return result
 
 
 def _placeholder_data(shape: Any) -> dict[str, Any] | None:
@@ -190,6 +221,7 @@ def _shape_elements(shapes: Iterable[Any], slide_index: int, start_order: int = 
             "parent_shape": parent,
             "geometry_emu": _shape_geometry(shape),
             "placeholder": _placeholder_data(shape),
+            "accessibility": _shape_accessibility(shape),
         }
 
         if bool(_safe_attr(shape, "has_table", False)):
@@ -218,6 +250,8 @@ def _shape_elements(shapes: Iterable[Any], slide_index: int, start_order: int = 
                         "size_pixels": list(_safe_attr(image, "size", ())) or None,
                         "dpi": list(_safe_attr(image, "dpi", ())) or None,
                         "sha1": _safe_attr(image, "sha1"),
+                        "sha256": hashlib.sha256(_safe_attr(image, "blob", b"")).hexdigest()
+                        if _safe_attr(image, "blob", None) is not None else None,
                     },
                 },
                 source=source,
@@ -276,11 +310,27 @@ class PptxExtractor(BaseExtractor):
         units: list[DocumentUnit] = []
         warnings: list[ExtractionWarning] = []
         unsupported: list[UnsupportedObject] = []
+        masters = []
+        for master_index, master in enumerate(presentation.slide_masters, start=1):
+            masters.append({
+                "index": master_index,
+                "name": _safe_attr(master, "name"),
+                "visible_text": _shape_text_snapshot(master.shapes),
+                "layouts": [
+                    {
+                        "index": layout_index,
+                        "name": _safe_attr(layout, "name"),
+                        "visible_text": _shape_text_snapshot(layout.shapes),
+                    }
+                    for layout_index, layout in enumerate(master.slide_layouts, start=1)
+                ],
+            })
         metadata.properties["powerpoint"] = {
             "core_properties": _core_properties(presentation.core_properties),
             "slide_count": len(presentation.slides),
             "slide_width_emu": int(presentation.slide_width),
             "slide_height_emu": int(presentation.slide_height),
+            "masters": masters,
         }
 
         for slide_index, slide in enumerate(presentation.slides, start=1):
@@ -321,6 +371,8 @@ class PptxExtractor(BaseExtractor):
                     "slide_id": _safe_attr(slide, "slide_id"),
                     "hidden": hidden,
                     "layout_name": _safe_attr(_safe_attr(slide, "slide_layout"), "name"),
+                    "layout_visible_text": _shape_text_snapshot(slide.slide_layout.shapes),
+                    "master_visible_text": _shape_text_snapshot(slide.slide_layout.slide_master.shapes),
                     "shape_count": len(slide.shapes),
                     "has_notes": bool(notes_text),
                 },
@@ -353,4 +405,18 @@ class PptxExtractor(BaseExtractor):
             ))
 
         assets = collect_ooxml_assets(path, detected.document_type)
-        return CanonicalDocument(metadata=metadata, units=units, warnings=warnings, unsupported_objects=unsupported, assets=assets)
+        asset_by_sha = {asset.sha256: asset.asset_id for asset in assets if asset.sha256}
+        for unit in units:
+            for element in unit.elements:
+                if element.element_type != ElementType.IMAGE:
+                    continue
+                image = element.data.get("image", {})
+                if image.get("sha256") in asset_by_sha:
+                    image["asset_id"] = asset_by_sha[image["sha256"]]
+        return CanonicalDocument(
+            metadata=metadata,
+            units=units,
+            warnings=warnings,
+            unsupported_objects=unsupported,
+            assets=assets,
+        )

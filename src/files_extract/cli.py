@@ -30,6 +30,11 @@ def build_parser() -> argparse.ArgumentParser:
     extract_p.add_argument("--no-assets", action="store_true", help="Do not write embedded media/attachments to the assets directory.")
     extract_p.add_argument("--no-render-word-pages", action="store_true", help="Skip LibreOffice Word page-count verification.")
     extract_p.add_argument("--max-file-size-mb", type=int, default=512)
+    extract_p.add_argument("--max-archive-uncompressed-mb", type=int, default=2048)
+    extract_p.add_argument("--max-archive-members", type=int, default=100000)
+    extract_p.add_argument("--max-archive-member-mb", type=int, default=1024)
+    extract_p.add_argument("--libreoffice-timeout", type=int, default=180, help="LibreOffice conversion timeout in seconds.")
+    extract_p.add_argument("--password", help="Password for an encrypted PDF. The password is never written to output metadata.")
 
     batch_p = sub.add_parser("batch", help="Extract all supported files in a directory.")
     batch_p.add_argument("input", type=Path)
@@ -38,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
     batch_p.add_argument("--no-assets", action="store_true")
     batch_p.add_argument("--no-render-word-pages", action="store_true")
     batch_p.add_argument("--max-file-size-mb", type=int, default=512)
+    batch_p.add_argument("--max-archive-uncompressed-mb", type=int, default=2048)
+    batch_p.add_argument("--max-archive-members", type=int, default=100000)
+    batch_p.add_argument("--max-archive-member-mb", type=int, default=1024)
+    batch_p.add_argument("--libreoffice-timeout", type=int, default=180, help="LibreOffice conversion timeout in seconds.")
+    batch_p.add_argument("--password", help="Password to try for encrypted PDFs in this batch.")
 
     doctor_p = sub.add_parser("doctor", help="Report dependency/backend availability.")
     doctor_p.add_argument("--json", action="store_true")
@@ -48,6 +58,11 @@ def _engine(args: argparse.Namespace) -> ExtractionEngine:
     return ExtractionEngine(options=ExtractionOptions(
         render_word_pages=not bool(getattr(args, "no_render_word_pages", False)),
         max_file_size_bytes=int(getattr(args, "max_file_size_mb", 512)) * 1024 * 1024,
+        max_archive_uncompressed_bytes=int(getattr(args, "max_archive_uncompressed_mb", 2048)) * 1024 * 1024,
+        max_archive_members=int(getattr(args, "max_archive_members", 100000)),
+        max_archive_single_member_bytes=int(getattr(args, "max_archive_member_mb", 1024)) * 1024 * 1024,
+        libreoffice_timeout_seconds=int(getattr(args, "libreoffice_timeout", 180)),
+        pdf_password=getattr(args, "password", None),
     ))
 
 
@@ -58,6 +73,7 @@ def _extract_one(engine: ExtractionEngine, source: Path, output: Path, args: arg
         output_format=getattr(args, "format", "both"),
         json_indent=getattr(args, "json_indent", 2),
         extract_assets=not bool(getattr(args, "no_assets", False)),
+        pdf_password=getattr(args, "password", None),
     )
     print(f"Extracted: {source}")
     print(f"Type: {document.metadata.document_type}")
@@ -81,6 +97,9 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"{name}: {status} {info.get('version') or ''}".rstrip())
                 lo = report["external_tools"]["libreoffice"]
                 print(f"LibreOffice: {'OK' if lo['available'] else 'MISSING'} {lo.get('version') or ''}".rstrip())
+                tess = report["external_tools"]["tesseract"]
+                langs = ",".join(tess.get("languages") or [])
+                print(f"Tesseract: {'OK' if tess['available'] else 'MISSING'} {tess.get('version') or ''} {langs}".rstrip())
             return 0
 
         engine = _engine(args)
@@ -91,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"media_type={d.media_type or ''}")
             print(f"legacy_office={str(d.is_legacy_office).lower()}")
             print(f"macro_enabled={str(d.is_macro_enabled).lower()}")
+            print(f"encrypted_office={str(d.is_encrypted_office).lower()}")
             return 0
 
         if args.command == "extract":
@@ -107,13 +127,14 @@ def main(argv: list[str] | None = None) -> int:
         failures = 0
         for source in files:
             relative = source.relative_to(root)
-            out = args.output.resolve() / relative.parent / f"{source.stem}_extracted"
+            suffix = source.suffix.lower().lstrip(".") or "file"
+            out = args.output.resolve() / relative.parent / f"{source.stem}__{suffix}_extracted"
             try:
                 manifest = _extract_one(engine, source, out, args)
                 summary.append({"source": relative.as_posix(), "status": "ok", "summary": manifest["summary"]})
             except Exception as exc:
                 failures += 1
-                summary.append({"source": relative.as_posix(), "status": "error", "error": str(exc)})
+                summary.append({"source": relative.as_posix(), "status": "error", "error_type": type(exc).__name__, "error": str(exc)})
                 print(f"Failed: {source}: {exc}", file=sys.stderr)
         args.output.mkdir(parents=True, exist_ok=True)
         (args.output / "batch-summary.json").write_text(json.dumps({"files": summary, "failures": failures}, ensure_ascii=False, indent=2), encoding="utf-8")

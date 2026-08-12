@@ -84,6 +84,19 @@ def _render_sheet(unit: Any, lines: list[str]) -> None:
         f"- Used range: {meta.get('max_row', 0)} row(s) × {meta.get('max_column', 0)} column(s)",
         "",
     ])
+    headers_footers = meta.get("headers_footers") or {}
+    visible_stories = []
+    for role, story in headers_footers.items():
+        values = [story.get("left"), story.get("center"), story.get("right")] if isinstance(story, dict) else []
+        text = " | ".join(str(value) for value in values if value)
+        if text:
+            visible_stories.append((role, text))
+    if visible_stories:
+        lines.extend(["### Headers / footers", ""] )
+        for role, text in visible_stories:
+            lines.append(f"- **{role.replace('_', ' ').title()}**: {text}")
+        lines.append("")
+
     cells = [e for e in unit.elements if e.element_type == ElementType.CELL]
     if cells:
         lines.extend(["### Cells", "", "| Cell | Value | Formula | Cached value | Comment | Hyperlink |", "|---|---|---|---|---|---|"])
@@ -94,6 +107,27 @@ def _render_sheet(unit: Any, lines: list[str]) -> None:
                 _escape(d.get("cached_value")), _escape(comment.get("text")),
                 _escape(link.get("target") or link.get("location")),
             ))
+        lines.append("")
+
+    table_elements = [e for e in unit.elements if e.element_type == ElementType.TABLE]
+    if table_elements:
+        lines.extend(["### Excel table definitions", ""] )
+        for element in table_elements:
+            data = element.data or {}
+            lines.append(f"- `{data.get('display_name') or data.get('name') or element.element_id}`: `{data.get('ref') or ''}`")
+        lines.append("")
+
+    image_elements = [e for e in unit.elements if e.element_type == ElementType.IMAGE]
+    if image_elements:
+        lines.extend(["### Images", ""] )
+        for element in image_elements:
+            image = element.data.get("image", {})
+            anchor = image.get("from") or {}
+            asset_id = image.get("asset_id") or "unlinked-asset"
+            lines.append(
+                f"- `{asset_id}` anchored near row {anchor.get('row_zero_based', '?')}, "
+                f"column {anchor.get('column_zero_based', '?')}"
+            )
         lines.append("")
 
 
@@ -121,8 +155,40 @@ def render_markdown(document: CanonicalDocument) -> str:
         if unit.kind == UnitKind.SHEET:
             _render_sheet(unit, lines)
         else:
+            if unit.kind == UnitKind.SLIDE:
+                inherited = []
+                for source_name in ("layout_visible_text", "master_visible_text"):
+                    for item in unit.metadata.get(source_name, []) or []:
+                        text = item.get("text") or item.get("accessibility", {}).get("description")
+                        if text and text not in inherited:
+                            inherited.append(text)
+                if inherited:
+                    lines.extend(["### Inherited layout/master content", ""] )
+                    lines.extend([f"- {text}" for text in inherited])
+                    lines.append("")
             for element in sorted(unit.elements, key=lambda x: x.order):
                 _render_element(element, lines)
+    if document.metadata.document_type == "pdf":
+        form_fields = document.metadata.properties.get("pdf", {}).get("form_fields", {}) or {}
+        if form_fields:
+            lines.extend(["## PDF form fields", ""] )
+            for name, field in form_fields.items():
+                lines.append(f"- **{name}**: {_escape(field.get('value'))} (`{field.get('field_type') or ''}`)")
+            lines.append("")
+
+    if document.metadata.document_type in {"docx", "docm", "doc"}:
+        pagination = document.metadata.properties.get("word", {}).get("pagination", {}) or {}
+        rendered_pages = pagination.get("rendered_pages") or []
+        if rendered_pages:
+            lines.extend(["## Rendered Word pagination reference", ""] )
+            lines.append(
+                "Native Word elements above preserve document structure; the following renderer-derived text "
+                "preserves page boundaries."
+            )
+            lines.append("")
+            for page in rendered_pages:
+                lines.extend([f"### Rendered page {page.get('page_number')}", "", page.get("text") or "[No extractable text]", ""])
+
     if document.assets:
         lines.extend(["## Assets", ""])
         for asset in document.assets:

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import re
+import hashlib
 import zipfile
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 from xml.etree import ElementTree as ET
 
 from docx import Document
@@ -28,8 +28,10 @@ from ..models import (
 from .base import BaseExtractor
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 EP_NS = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
 W = f"{{{W_NS}}}"
+M = f"{{{M_NS}}}"
 
 
 def _safe_attr(obj: Any, name: str, default: Any = None) -> Any:
@@ -71,12 +73,41 @@ def _paragraph_numbering(paragraph: Paragraph) -> dict[str, Any] | None:
 
 def _run_data(run: Any) -> dict[str, Any]:
     font = run.font
+    inner_content: list[dict[str, Any]] = []
+    for item in _safe_attr(run, "iter_inner_content", lambda: [])():
+        if isinstance(item, str):
+            if item:
+                inner_content.append({"type": "text", "text": item})
+            continue
+        if bool(_safe_attr(item, "has_picture", False)):
+            try:
+                image = item.image
+                payload = image.blob
+                inner_content.append({
+                    "type": "image",
+                    "filename": image.filename,
+                    "extension": image.ext,
+                    "content_type": image.content_type,
+                    "sha1": image.sha1,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "pixel_width": _safe_attr(image, "px_width"),
+                    "pixel_height": _safe_attr(image, "px_height"),
+                    "horizontal_dpi": _safe_attr(image, "horz_dpi"),
+                    "vertical_dpi": _safe_attr(image, "vert_dpi"),
+                })
+            except Exception:
+                inner_content.append({"type": "drawing", "picture": True})
+            continue
+        item_name = item.__class__.__name__
+        inner_content.append({"type": "rendered_page_break" if "PageBreak" in item_name else "drawing", "class": item_name})
+
     return {
         "text": run.text,
         "bold": run.bold,
         "italic": run.italic,
         "underline": str(run.underline) if run.underline is not None else None,
         "style": _safe_attr(_safe_attr(run, "style"), "name"),
+        "inner_content": inner_content,
         "font": {
             "name": font.name,
             "size_emu": _length(font.size),
@@ -86,6 +117,7 @@ def _run_data(run: Any) -> dict[str, Any]:
             "all_caps": font.all_caps,
             "small_caps": font.small_caps,
             "strike": font.strike,
+            "hidden": _safe_attr(font, "hidden"),
             "subscript": font.subscript,
             "superscript": font.superscript,
         },
@@ -215,7 +247,15 @@ def _extended_properties(path: Path) -> dict[str, Any]:
 
 
 def _raw_special_content(path: Path) -> dict[str, Any]:
-    result: dict[str, Any] = {"footnotes": [], "endnotes": [], "textboxes": [], "revisions": []}
+    result: dict[str, Any] = {
+        "footnotes": [],
+        "endnotes": [],
+        "textboxes": [],
+        "revisions": [],
+        "content_controls": [],
+        "equations": [],
+        "field_instructions": [],
+    }
     try:
         with zipfile.ZipFile(path) as archive:
             names = set(archive.namelist())
@@ -249,6 +289,26 @@ def _raw_special_content(path: Path) -> dict[str, Any]:
                                 "date": node.attrib.get(W + "date"),
                                 "id": node.attrib.get(W + "id"),
                             })
+                for index, node in enumerate(root.findall(f".//{W}sdt"), start=1):
+                    text = _xml_text(node).strip()
+                    props = node.find(f"{W}sdtPr")
+                    alias = props.find(f"{W}alias") if props is not None else None
+                    tag_node = props.find(f"{W}tag") if props is not None else None
+                    result["content_controls"].append({
+                        "index": index,
+                        "text": text,
+                        "alias": alias.attrib.get(W + "val") if alias is not None else None,
+                        "tag": tag_node.attrib.get(W + "val") if tag_node is not None else None,
+                    })
+                for index, node in enumerate(root.findall(f".//{M}oMath"), start=1):
+                    text = "".join((child.text or "") for child in node.iter() if child.tag == M + "t").strip()
+                    result["equations"].append({"index": index, "text": text})
+                seen_fields: set[str] = set()
+                for node in root.findall(f".//{W}instrText"):
+                    instruction = (node.text or "").strip()
+                    if instruction and instruction not in seen_fields:
+                        seen_fields.add(instruction)
+                        result["field_instructions"].append(instruction)
     except Exception:
         pass
     return result
@@ -339,6 +399,48 @@ class DocxExtractor(BaseExtractor):
             section_data.append(entry)
         metadata.properties["word"]["sections"] = section_data
 
+        header_footer_count = 0
+        for section_entry in section_data:
+            section_index = int(section_entry["index"])
+            for role in (
+                "header", "footer", "first_page_header", "first_page_footer",
+                "even_page_header", "even_page_footer",
+            ):
+                story = section_entry[role]
+                if section_index > 1 and story.get("is_linked_to_previous"):
+                    continue
+                for block_index, block in enumerate(story.get("blocks") or [], start=1):
+                    if block.get("type") == "paragraph":
+                        text = block.get("text") or ""
+                        if not text:
+                            continue
+                        elements.append(DocumentElement(
+                            element_id=f"doc-section-{section_index}-{role}-{block_index}",
+                            element_type=ElementType.NOTE,
+                            order=order,
+                            text=text,
+                            data={"role": role, "section_index": section_index, "style": block.get("style")},
+                            source=source,
+                        ))
+                    elif block.get("type") == "table":
+                        table_data = block.get("table") or {}
+                        text = "\n".join(
+                            " | ".join(cell.get("text", "") for cell in row)
+                            for row in table_data.get("rows", [])
+                        )
+                        elements.append(DocumentElement(
+                            element_id=f"doc-section-{section_index}-{role}-table-{block_index}",
+                            element_type=ElementType.TABLE,
+                            order=order,
+                            text=text or None,
+                            data={"role": role, "section_index": section_index, "table": table_data},
+                            source=source,
+                        ))
+                    else:
+                        continue
+                    header_footer_count += 1
+                    order += 1
+
         for comment in document.comments:
             elements.append(DocumentElement(
                 element_id=f"doc-comment-{comment.comment_id}",
@@ -388,6 +490,36 @@ class DocxExtractor(BaseExtractor):
                 source=source,
             ))
             order += 1
+        for control in special["content_controls"]:
+            elements.append(DocumentElement(
+                element_id=f"doc-content-control-{control['index']}",
+                element_type=ElementType.OTHER,
+                order=order,
+                text=control.get("text") or None,
+                data={"role": "content_control", **control},
+                source=source,
+            ))
+            order += 1
+        for equation in special["equations"]:
+            elements.append(DocumentElement(
+                element_id=f"doc-equation-{equation['index']}",
+                element_type=ElementType.FORMULA,
+                order=order,
+                text=equation.get("text") or None,
+                data={"role": "office_math", **equation},
+                source=source,
+            ))
+            order += 1
+        for field_index, instruction in enumerate(special["field_instructions"], start=1):
+            elements.append(DocumentElement(
+                element_id=f"doc-field-{field_index}",
+                element_type=ElementType.METADATA,
+                order=order,
+                text=instruction,
+                data={"role": "field_instruction"},
+                source=source,
+            ))
+            order += 1
 
         archive_names: set[str] = set()
         try:
@@ -409,6 +541,22 @@ class DocxExtractor(BaseExtractor):
                     source=source,
                     metadata={"count": len(members), "archive_parts": members},
                 ))
+        try:
+            with zipfile.ZipFile(path) as archive:
+                if "word/document.xml" in archive_names:
+                    doc_root = ET.fromstring(archive.read("word/document.xml"))
+                    alt_chunks = doc_root.findall(f".//{W}altChunk")
+                    if alt_chunks:
+                        unsupported.append(UnsupportedObject(
+                            object_type="docx_altchunk",
+                            status="detected_not_fully_parsed",
+                            description="External/imported altChunk content was detected; the package relationship is retained but imported content is not expanded.",
+                            source=source,
+                            metadata={"count": len(alt_chunks)},
+                        ))
+        except Exception:
+            pass
+
         if "word/vbaProject.bin" in archive_names:
             unsupported.append(UnsupportedObject(
                 object_type="vba_project", status="detected_not_parsed",
@@ -417,6 +565,13 @@ class DocxExtractor(BaseExtractor):
             ))
 
         assets = collect_ooxml_assets(path, detected.document_type)
+        asset_by_sha = {asset.sha256: asset.asset_id for asset in assets if asset.sha256}
+        for element in elements:
+            for run in element.data.get("runs", []) if isinstance(element.data, dict) else []:
+                for item in run.get("inner_content", []):
+                    if item.get("type") == "image" and item.get("sha256") in asset_by_sha:
+                        item["asset_id"] = asset_by_sha[item["sha256"]]
+
         unit = DocumentUnit(
             index=1,
             kind=UnitKind.DOCUMENT,
@@ -430,6 +585,10 @@ class DocxExtractor(BaseExtractor):
                 "endnote_count": len(special["endnotes"]),
                 "textbox_count": len(special["textboxes"]),
                 "tracked_change_count": len(special["revisions"]),
+                "content_control_count": len(special["content_controls"]),
+                "equation_count": len(special["equations"]),
+                "field_instruction_count": len(special["field_instructions"]),
+                "header_footer_element_count": header_footer_count,
                 "stored_page_count": extended.get("Pages"),
             },
         )

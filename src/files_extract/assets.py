@@ -17,38 +17,84 @@ def _safe_name(name: str) -> str:
 
 
 def collect_ooxml_assets(path: Path, family: str) -> list[AssetReference]:
-    prefix = {
-        "docx": "word/media/", "docm": "word/media/",
-        "pptx": "ppt/media/", "pptm": "ppt/media/",
-        "xlsx": "xl/media/", "xlsm": "xl/media/",
+    root = {
+        "docx": "word", "docm": "word",
+        "pptx": "ppt", "pptm": "ppt",
+        "xlsx": "xl", "xlsm": "xl",
     }.get(family)
-    if not prefix or not zipfile.is_zipfile(path):
+    if not root or not zipfile.is_zipfile(path):
         return []
+
+    specs = [
+        (f"{root}/media/", "embedded_media", "media"),
+        (f"{root}/embeddings/", "embedded_object", "embeddings"),
+        (f"{root}/activeX/", "activex_part", "activex"),
+        (f"{root}/charts/", "raw_package_part", "package-parts/charts"),
+        (f"{root}/diagrams/", "raw_package_part", "package-parts/diagrams"),
+    ]
+    if root == "xl":
+        specs.extend([
+            ("xl/pivotTables/", "raw_package_part", "package-parts/pivot-tables"),
+            ("xl/slicers/", "raw_package_part", "package-parts/slicers"),
+            ("xl/queryTables/", "raw_package_part", "package-parts/query-tables"),
+        ])
+    vba_member = f"{root}/vbaProject.bin"
+
     assets: list[AssetReference] = []
+    used_paths: set[str] = set()
     with zipfile.ZipFile(path) as archive:
-        members = sorted(name for name in archive.namelist() if name.startswith(prefix) and not name.endswith("/"))
-        used: set[str] = set()
-        for index, member in enumerate(members, start=1):
+        names = set(archive.namelist())
+        candidates: list[tuple[str, str, str]] = []
+        for prefix, asset_type, directory in specs:
+            candidates.extend(
+                (member, asset_type, directory)
+                for member in sorted(names)
+                if member.startswith(prefix) and not member.endswith("/")
+            )
+        candidates.extend(
+            (member, "raw_package_part", "package-parts/custom-xml")
+            for member in sorted(names)
+            if member.startswith("customXml/") and not member.endswith("/")
+        )
+        if root == "xl" and "xl/connections.xml" in names:
+            candidates.append(("xl/connections.xml", "raw_package_part", "package-parts/connections"))
+        if vba_member in names:
+            candidates.append((vba_member, "vba_project", "macros"))
+
+        for index, (member, asset_type, directory) in enumerate(candidates, start=1):
             payload = archive.read(member)
             base = _safe_name(member)
-            out_name = base if base not in used else f"{index:03d}_{base}"
-            used.add(out_name)
+            out_name = base
+            candidate_path = f"assets/{directory}/{out_name}"
+            if candidate_path in used_paths:
+                out_name = f"{index:03d}_{base}"
+                candidate_path = f"assets/{directory}/{out_name}"
+            used_paths.add(candidate_path)
             media_type, _ = mimetypes.guess_type(base)
             assets.append(AssetReference(
                 asset_id=f"{family}-asset-{index}",
-                asset_type="embedded_media",
+                asset_type=asset_type,
                 original_name=base,
-                output_path=f"assets/{out_name}",
-                media_type=media_type,
+                output_path=candidate_path,
+                media_type=media_type or ("application/vnd.ms-office.vbaProject" if asset_type == "vba_project" else None),
                 sha256=hashlib.sha256(payload).hexdigest(),
                 size_bytes=len(payload),
                 source=SourceReference(archive_part=member),
-                metadata={"archive_member": member},
+                metadata={
+                    "archive_member": member,
+                    "potentially_active_content": asset_type in {"embedded_object", "activex_part", "vba_project"},
+                },
             ))
     return assets
 
 
-def materialize_assets(source: Path, document: CanonicalDocument, output_dir: Path) -> list[Path]:
+def materialize_assets(
+    source: Path,
+    document: CanonicalDocument,
+    output_dir: Path,
+    *,
+    pdf_password: str | None = None,
+) -> list[Path]:
     written: list[Path] = []
 
     archive_assets = [a for a in document.assets if a.metadata.get("archive_member") and a.output_path]
@@ -63,8 +109,6 @@ def materialize_assets(source: Path, document: CanonicalDocument, output_dir: Pa
                     payload = archive.read(member)
                 except KeyError:
                     continue
-                # Re-check the digest before writing so a changed/re-converted source
-                # cannot silently produce bytes different from the canonical manifest.
                 if asset.sha256 and hashlib.sha256(payload).hexdigest() != asset.sha256:
                     continue
                 target = output_dir / str(asset.output_path)
@@ -75,9 +119,6 @@ def materialize_assets(source: Path, document: CanonicalDocument, output_dir: Pa
     if archive_assets and zipfile.is_zipfile(source):
         materialize_archive(source, archive_assets)
     elif archive_assets:
-        # Legacy DOC/XLS/PPT extraction runs against a temporary OOXML conversion.
-        # Re-convert only while writing assets, avoiding persistent temp files and
-        # keeping the CanonicalDocument independent from transient paths.
         groups: dict[str, list[AssetReference]] = {}
         for asset in archive_assets:
             target_family = asset.metadata.get("legacy_conversion_target")
@@ -91,8 +132,6 @@ def materialize_assets(source: Path, document: CanonicalDocument, output_dir: Pa
                     with converted_temp(source, target_family) as converted:
                         materialize_archive(converted, assets)
                 except Exception:
-                    # Extraction has already surfaced the asset metadata; failure to
-                    # materialize is reflected by the output manifest's written count.
                     continue
 
     pdf_assets = [a for a in document.assets if a.asset_type in {"pdf_image", "pdf_attachment"} and a.output_path]
@@ -101,7 +140,9 @@ def materialize_assets(source: Path, document: CanonicalDocument, output_dir: Pa
             from pypdf import PdfReader
             reader = PdfReader(source, strict=False)
             if reader.is_encrypted:
-                reader.decrypt("")
+                result = reader.decrypt(pdf_password or "")
+                if not result:
+                    return written
             attachments = None
             for asset in pdf_assets:
                 payload: bytes | None = None

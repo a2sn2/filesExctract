@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -174,7 +176,8 @@ class PdfExtractor(BaseExtractor):
     name = "docling+pypdf"
     supported_types = frozenset({"pdf"})
 
-    def __init__(self) -> None:
+    def __init__(self, password: str | None = None) -> None:
+        self.password = password
         try:
             import pypdf
             pypdf_version = pypdf.__version__
@@ -213,17 +216,20 @@ class PdfExtractor(BaseExtractor):
         self._augment_low_level(reader, document)
         return document
 
-    @staticmethod
-    def _open_reader(path: Path) -> PdfReader:
+    def _open_reader(self, path: Path) -> PdfReader:
         try:
             reader = PdfReader(path, strict=False)
             if reader.is_encrypted:
+                password = self.password if self.password is not None else ""
                 try:
-                    result = reader.decrypt("")
+                    result = reader.decrypt(password)
                 except Exception:
                     result = 0
                 if not result:
-                    raise ExtractionFailedError("PDF is encrypted and cannot be opened without a password.")
+                    raise ExtractionFailedError(
+                        "PDF is encrypted and the supplied password is missing or incorrect. "
+                        "Use --password when extracting the document."
+                    )
             return reader
         except ExtractionFailedError:
             raise
@@ -280,12 +286,57 @@ class PdfExtractor(BaseExtractor):
             ))
         return CanonicalDocument(metadata=metadata, units=units, warnings=warnings)
 
-    def _extract_docling(self, path: Path, metadata: DocumentMetadata) -> CanonicalDocument:
-        from docling.document_converter import DocumentConverter
+    @staticmethod
+    def _tesseract_languages() -> set[str]:
+        executable = shutil.which("tesseract")
+        if not executable:
+            return set()
+        try:
+            proc = subprocess.run(
+                [executable, "--list-langs"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            lines = (proc.stdout or "").splitlines()
+            return {line.strip() for line in lines if line.strip() and "List of available" not in line}
+        except Exception:
+            return set()
 
-        converter = DocumentConverter()
+    def _extract_docling(self, path: Path, metadata: DocumentMetadata) -> CanonicalDocument:
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions, TesseractCliOcrOptions
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+
+        pipeline_options = PdfPipelineOptions()
+        pipeline_options.document_timeout = 180
+        pipeline_options.do_ocr = True
+        pipeline_options.do_table_structure = True
+        pipeline_options.table_structure_options.do_cell_matching = True
+
+        tesseract_languages = self._tesseract_languages()
+        selected_languages: list[str] = []
+        if tesseract_languages:
+            if "ara" in tesseract_languages:
+                selected_languages.append("ara")
+            if "eng" in tesseract_languages:
+                selected_languages.append("eng")
+            if selected_languages:
+                pipeline_options.ocr_options = TesseractCliOcrOptions(lang=selected_languages)
+
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+            }
+        )
         result = converter.convert(path)
         doc = result.document
+        metadata.properties.setdefault("pdf", {})["ocr"] = {
+            "enabled": True,
+            "engine": "tesseract-cli" if selected_languages else "docling-auto",
+            "languages": selected_languages,
+        }
         page_count = int(doc.num_pages())
         units = [DocumentUnit(index=i, kind=UnitKind.PAGE, name=f"Page {i}") for i in range(1, page_count + 1)]
         by_page = {unit.index: unit for unit in units}
@@ -293,7 +344,16 @@ class PdfExtractor(BaseExtractor):
         unpaged: list[DocumentElement] = []
         unpaged_order = 1
 
-        for item, level in doc.iterate_items(traverse_pictures=True):
+        try:
+            from docling_core.types.doc.document import ContentLayer
+            included_layers = {ContentLayer.BODY, ContentLayer.FURNITURE}
+        except Exception:
+            included_layers = None
+
+        for item, level in doc.iterate_items(
+            traverse_pictures=True,
+            included_content_layers=included_layers,
+        ):
             label_obj = _safe_attr(item, "label")
             label = _safe_attr(label_obj, "value") or str(label_obj or item.__class__.__name__)
             prov_list = _safe_attr(item, "prov", []) or []
@@ -367,6 +427,14 @@ class PdfExtractor(BaseExtractor):
                         source=SourceReference(unit_index=page_index, page_number=page_index),
                     ))
                     order += 1
+                elif annotation.get("contents"):
+                    unit.elements.append(DocumentElement(
+                        f"page-{page_index}-annotation-{annotation_index}", ElementType.NOTE, order,
+                        annotation.get("contents"),
+                        data={"role": "pdf_annotation", **annotation},
+                        source=SourceReference(unit_index=page_index, page_number=page_index),
+                    ))
+                    order += 1
             try:
                 for image_index, image in enumerate(page.images):
                     payload = image.data
@@ -392,16 +460,17 @@ class PdfExtractor(BaseExtractor):
 
         try:
             attachments = reader.attachments
+            attachment_counter = 0
             for name, content_list in attachments.items():
                 for index, payload in enumerate(content_list):
+                    attachment_counter += 1
                     media_type, _ = mimetypes.guess_type(str(name))
-                    suffix = f"-{index + 1}" if len(content_list) > 1 else ""
                     out_name = Path(str(name)).name or f"attachment-{index + 1}.bin"
                     document.assets.append(AssetReference(
-                        asset_id=f"pdf-attachment-{len(document.assets) + 1}",
+                        asset_id=f"pdf-attachment-{attachment_counter}",
                         asset_type="pdf_attachment",
                         original_name=str(name),
-                        output_path=f"assets/attachment{suffix}-{out_name}",
+                        output_path=f"assets/attachments/{attachment_counter:03d}-{out_name}",
                         media_type=media_type,
                         sha256=hashlib.sha256(payload).hexdigest(),
                         size_bytes=len(payload),

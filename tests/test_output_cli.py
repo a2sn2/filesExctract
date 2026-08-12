@@ -23,6 +23,7 @@ def test_doctor_json(capsys) -> None:
     report = json.loads(capsys.readouterr().out)
     assert report["dependencies"]["openpyxl"]["available"] is True
     assert "libreoffice" in report["external_tools"]
+    assert "tesseract" in report["external_tools"]
 
 
 def test_batch_continues_and_writes_summary(tmp_path: Path, xlsx_file: Path, docx_file: Path) -> None:

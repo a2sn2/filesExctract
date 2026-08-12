@@ -1,22 +1,21 @@
 # filesExctract
 
-`files-extract` is a local-first document extraction engine for PDF, Word, Excel and PowerPoint files. It converts source documents into a common structured JSON model plus Markdown while preserving source units (pages/sheets/slides), order, tables, cells, formulas, notes, links, metadata, embedded media references and explicit completeness warnings.
+`files-extract` is a local-first extraction engine for PDF, Word, Excel and PowerPoint documents. It produces a canonical structured JSON representation plus Markdown while retaining source structure, provenance, embedded assets and explicit completeness warnings.
 
-> The repository is currently named `filesExctract`. The Python package and command use the corrected names `files_extract` and `files-extract`.
+> The GitHub repository is currently named `filesExctract`. The installable Python package and CLI intentionally use the corrected names `files_extract` and `files-extract`.
 
-## Supported formats
+## What it preserves
 
-| Format | Native extraction | Structural unit | Notes |
-|---|---|---|---|
-| PDF | Yes | page | Docling when installed, pypdf fallback; images, links, forms, metadata, attachments |
-| DOCX / DOCM | Yes | document | paragraphs, runs, headings, lists, tables/nested tables, comments, headers/footers, sections, foot/endnotes, text boxes, revisions, media |
-| XLSX / XLSM | Yes | sheet | cells, formulas/cached values, comments, hyperlinks, merged ranges, hidden rows/columns/sheets, tables, validations, media |
-| PPTX / PPTM | Yes | slide | shape z-order, text/runs, tables, charts, notes, pictures, hidden slides, media |
-| DOC / XLS / PPT | Yes via LibreOffice | corresponding modern unit | converted locally before extraction |
+- **PDF:** page count, page order, semantic reading order with Docling, tables, OCR text, headers/footers/furniture, bounding boxes, annotations, links, form fields, outline, images and attachments.
+- **Word:** native block order, paragraphs/runs/formatting, headings/lists, hyperlinks, tables and nested tables, comments, headers/footers, sections, footnotes/endnotes, text boxes, tracked changes, content controls, field instructions, Office Math text, embedded media and renderer-derived page boundaries.
+- **Excel:** ordered/hidden sheets, cells and coordinates, values, formulas and cached values when present, number formats/styles, comments, hyperlinks, merged ranges, hidden rows/columns, tables, validation rules, headers/footers, row/column dimensions, filters, freeze panes, print metadata and embedded media.
+- **PowerPoint:** ordered/hidden slides, shape z-order and geometry, text/runs/hyperlinks, tables, charts, pictures, speaker notes, accessibility text and inherited layout/master content.
+- **Legacy Office:** `.doc`, `.xls` and `.ppt` are converted locally through LibreOffice and then passed through the same native extractors.
+- **Rich/unsupported objects:** SmartArt, VBA, ActiveX, OLE/embedded packages, pivot/query/slicer definitions and similar components are detected instead of disappearing silently; binary/raw package parts are preserved as assets where practical.
 
 ## Output package
 
-For `sample.xlsx`, the default output is:
+For `sample.xlsx`:
 
 ```text
 sample_extracted/
@@ -24,20 +23,28 @@ sample_extracted/
 ├── document.md
 ├── manifest.json
 └── assets/
-    └── ...embedded media and PDF attachments/images...
+    ├── media/
+    ├── embeddings/
+    ├── macros/
+    └── package-parts/
 ```
 
-`document.json` is the canonical machine-readable result. `document.md` is derived from the same canonical object for humans, RAG and LLM workflows. `manifest.json` contains counts plus SHA-256 checksums for written outputs.
+`document.json` is the canonical machine-readable contract. `document.md` is generated from the same canonical object for humans, search, RAG and LLM workflows. `manifest.json` records output counts, file sizes and SHA-256 checksums.
 
-## Install
+## Requirements
 
-Python 3.11+ is required.
+- Python 3.11+
+- LibreOffice is optional for modern Office files and required for `.doc/.xls/.ppt` plus Word rendered-pagination verification.
+- Docling is optional but strongly recommended for semantic PDF layout, table extraction and OCR.
+- Tesseract is preferred when available for Arabic/English OCR. The Docker image installs both `ara` and `eng` language data.
 
-### Core
-
-Core extraction works for all four modern families. PDF uses pypdf when Docling is not installed.
+## Local installation
 
 ```bash
+git clone https://github.com/a2sn2/filesExctract.git
+cd filesExctract
+git switch feat/foundation
+
 python -m venv .venv
 ```
 
@@ -46,7 +53,7 @@ Windows PowerShell:
 ```powershell
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -e ".[dev]"
+pip install -e ".[full,dev]"
 ```
 
 Linux/macOS:
@@ -54,63 +61,48 @@ Linux/macOS:
 ```bash
 source .venv/bin/activate
 python -m pip install --upgrade pip
-pip install -e ".[dev]"
-```
-
-### Full PDF/OCR backend
-
-For semantic PDF layout/table processing and OCR support, install the full extra:
-
-```bash
 pip install -e ".[full,dev]"
 ```
 
-Docling is used automatically when available. If it is absent or conversion fails, PDF extraction falls back to pypdf and records that fact in `warnings`.
-
-### LibreOffice
-
-LibreOffice is optional for modern files but required for:
-
-- legacy `.doc`, `.xls`, `.ppt` conversion;
-- rendered Word page-count verification.
-
-Check the machine:
+If you only need the lightweight core, omit `full`:
 
 ```bash
-files-extract doctor
+pip install -e ".[dev]"
+```
+
+Check the local environment:
+
+```bash
+files-extract doctor --json
 ```
 
 ## CLI
 
-Inspect only:
+Inspect a source without extracting it:
 
 ```bash
-files-extract inspect sample.xlsx
+files-extract inspect report.xlsx
 ```
 
 Extract one file:
 
 ```bash
-files-extract extract sample.xlsx
+files-extract extract report.xlsx
 ```
 
 Choose an output directory:
 
 ```bash
-files-extract extract sample.docx -o output/sample
+files-extract extract contract.docx -o output/contract
 ```
 
-Do not write embedded assets:
+Extract an encrypted PDF:
 
 ```bash
-files-extract extract sample.pptx --no-assets
+files-extract extract protected.pdf --password "your-password"
 ```
 
-Skip LibreOffice Word page rendering:
-
-```bash
-files-extract extract sample.docx --no-render-word-pages
-```
+The password is used in memory and is not written to `document.json`, Markdown or the manifest.
 
 Batch extraction:
 
@@ -118,40 +110,77 @@ Batch extraction:
 files-extract batch ./documents -o ./output --recursive
 ```
 
-Environment diagnostics:
+Batch output includes `batch-summary.json`; one failed document does not stop the remaining documents.
 
-```bash
-files-extract doctor --json
+Useful controls:
+
+```text
+--no-assets
+--no-render-word-pages
+--max-file-size-mb 512
+--max-archive-uncompressed-mb 2048
+--max-archive-members 100000
+--max-archive-member-mb 1024
+--libreoffice-timeout 180
 ```
-
-## Completeness contract
-
-Detected content must not silently disappear. Content that can be represented is emitted as canonical elements/assets. Rich objects that are only partially normalized are listed under `unsupported_objects`; recoverable extraction limitations are listed under `warnings`.
-
-Examples include VBA projects, unresolved external workbook links, SmartArt, OLE packages and cases where Docling/OCR is unavailable.
 
 ## Word pagination
 
-DOCX is flow-based, so paragraph-to-page mapping is renderer-dependent. The extractor preserves Word's stored extended page count when present and, by default, asks LibreOffice to render the document to PDF and records the rendered page count. A mismatch is reported as a warning rather than hidden.
+DOCX is a flow document; the final page boundaries depend on the renderer, installed fonts and page settings. `files-extract` therefore keeps two complementary views:
 
-## Development and tests
+1. native ordered Word elements and tables;
+2. when LibreOffice is available, a rendered PDF page count plus per-page extracted text stored under `metadata.properties.word.pagination` and appended to Markdown as a pagination reference.
+
+This avoids pretending that OOXML itself contains a universally exact paragraph-to-page mapping.
+
+## PDF strategy
+
+When the `full` extra is installed, Docling is the primary PDF backend and performs layout analysis, table reconstruction and OCR. `pypdf` always augments the result with low-level PDF information such as annotations, form fields, images and attachments. If Docling is unavailable or fails, extraction falls back to `pypdf` and records the degradation under `warnings`.
+
+The full Docker/CI path uses Tesseract Arabic + English when those language packs are available.
+
+## Security and resource controls
+
+- Processing is local by default; source documents are not uploaded by this project.
+- Detection uses file signatures and OOXML package structure instead of trusting extensions alone.
+- Modern password-protected Office containers are detected explicitly rather than misclassified as legacy files. Automatic Office decryption is not implemented in v0.3.0.
+- PDF passwords are supported through `--password`.
+- Source size and OOXML expanded-size/member limits protect against uncontrolled archive expansion.
+- Asset paths are normalized and validated against path traversal.
+- LibreOffice runs headless with an isolated temporary user profile and a timeout.
+- Extracted VBA/ActiveX/OLE assets are marked as potentially active content; the engine never executes them.
+
+## Tests
+
+Fast/core tests:
 
 ```bash
-pytest
+pytest -m "not integration and not docling"
 ```
 
-Run only fast tests:
-
-```bash
-pytest -m "not integration"
-```
-
-Run LibreOffice integration tests:
+LibreOffice integration tests:
 
 ```bash
 pytest -m integration
 ```
 
-The test corpus is generated during tests, so the repository does not need to ship private documents.
+Full Docling/OCR smoke tests:
 
-See `docs/architecture.md` and `docs/capability-matrix.md` for the internal design and fidelity status.
+```bash
+pytest -m docling
+```
+
+GitHub Actions tests Python 3.11, 3.12 and 3.13, LibreOffice legacy conversions, package building, real Docling/OCR conversion and Docker image construction.
+
+## Completeness contract
+
+The core rule is: **detected content must not silently disappear**.
+
+Normalized content is stored in canonical elements. Raw binaries/package parts are extracted when practical. Features that cannot yet be faithfully normalized are listed in `unsupported_objects`, and recoverable degradation is listed in `warnings`.
+
+See:
+
+- [`docs/canonical-schema.md`](docs/canonical-schema.md)
+- [`docs/architecture.md`](docs/architecture.md)
+- [`docs/capability-matrix.md`](docs/capability-matrix.md)
+- [`docs/release-checklist.md`](docs/release-checklist.md)

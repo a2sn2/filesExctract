@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import platform
+import shutil
+import subprocess
 import sys
 from typing import Any
 
@@ -14,6 +16,29 @@ def _module_version(module_name: str) -> dict[str, Any]:
         return {"available": True, "version": getattr(module, "__version__", None)}
     except Exception as exc:
         return {"available": False, "version": None, "error": str(exc)}
+
+
+def _tesseract_report() -> dict[str, Any]:
+    executable = shutil.which("tesseract")
+    if not executable:
+        return {"available": False, "path": None, "version": None, "languages": []}
+    version = None
+    languages: list[str] = []
+    try:
+        proc = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=15, check=False)
+        version = ((proc.stdout or proc.stderr).splitlines() or [None])[0]
+    except Exception:
+        pass
+    try:
+        proc = subprocess.run([executable, "--list-langs"], capture_output=True, text=True, timeout=15, check=False)
+        languages = sorted(
+            line.strip()
+            for line in (proc.stdout or "").splitlines()
+            if line.strip() and "List of available" not in line
+        )
+    except Exception:
+        pass
+    return {"available": True, "path": executable, "version": version, "languages": languages}
 
 
 def environment_report() -> dict[str, Any]:
@@ -29,5 +54,6 @@ def environment_report() -> dict[str, Any]:
         },
         "external_tools": {
             "libreoffice": {"available": bool(lo), "path": lo, "version": libreoffice_version() if lo else None},
+            "tesseract": _tesseract_report(),
         },
     }

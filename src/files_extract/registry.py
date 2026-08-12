@@ -6,8 +6,18 @@ from .extractors import BaseExtractor, DocxExtractor, PdfExtractor, PptxExtracto
 
 
 class ExtractorRegistry:
-    def __init__(self, extractors: list[BaseExtractor] | None = None) -> None:
-        self._extractors = extractors or [XlsxExtractor(), DocxExtractor(), PptxExtractor(), PdfExtractor()]
+    def __init__(
+        self,
+        extractors: list[BaseExtractor] | None = None,
+        *,
+        pdf_password: str | None = None,
+    ) -> None:
+        self._extractors = extractors or [
+            XlsxExtractor(),
+            DocxExtractor(),
+            PptxExtractor(),
+            PdfExtractor(password=pdf_password),
+        ]
 
     @property
     def extractors(self) -> tuple[BaseExtractor, ...]:
@@ -18,5 +28,6 @@ class ExtractorRegistry:
             if extractor.supports(detected):
                 return extractor
         raise UnsupportedFileTypeError(
-            f"No extractor is available for '{detected.document_type}'. Supported native types: PDF, DOCX/DOCM, XLSX/XLSM, PPTX/PPTM. Legacy DOC/XLS/PPT require LibreOffice conversion."
+            f"No extractor is available for '{detected.document_type}'. Supported native types: "
+            "PDF, DOCX/DOCM, XLSX/XLSM, PPTX/PPTM. Legacy DOC/XLS/PPT require LibreOffice conversion."
         )

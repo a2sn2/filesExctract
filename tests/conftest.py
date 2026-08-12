@@ -67,7 +67,7 @@ def docx_file(tmp_path: Path, sample_image: Path) -> Path:
     doc.sections[0].header.paragraphs[0].text = "رأس الصفحة"
     doc.sections[0].footer.paragraphs[0].text = "تذييل الصفحة"
     doc.add_page_break()
-    doc.add_paragraph("الصفحة الثانية")
+    doc.add_paragraph("الصفحة الثانية - SECOND PAGE MARKER")
     doc.save(path)
     return path
 
@@ -108,5 +108,52 @@ def pdf_file(tmp_path: Path, sample_image: Path) -> Path:
     c.drawImage(str(sample_image), 72, 650, width=100, height=50)
     c.showPage()
     c.drawString(72, 750, "Second PDF page")
+    c.save()
+    return path
+
+
+@pytest.fixture
+def pdf_with_attachment(tmp_path: Path, pdf_file: Path) -> Path:
+    from pypdf import PdfReader, PdfWriter
+
+    path = tmp_path / "with-attachment.pdf"
+    writer = PdfWriter()
+    writer.append(PdfReader(pdf_file))
+    writer.add_attachment("payload.txt", b"embedded attachment content")
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
+@pytest.fixture
+def encrypted_pdf_file(tmp_path: Path, pdf_file: Path) -> Path:
+    from pypdf import PdfReader, PdfWriter
+
+    path = tmp_path / "encrypted.pdf"
+    writer = PdfWriter()
+    writer.append(PdfReader(pdf_file))
+    writer.encrypt("secret")
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
+@pytest.fixture
+def scanned_pdf_file(tmp_path: Path) -> Path:
+    from PIL import ImageDraw, ImageFont
+
+    image_path = tmp_path / "ocr-source.png"
+    image = Image.new("RGB", (1200, 500), "white")
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", 72)
+    except Exception:
+        font = ImageFont.load_default()
+    draw.text((80, 180), "OCR TEST 123", fill="black", font=font)
+    image.save(image_path)
+
+    path = tmp_path / "scanned.pdf"
+    c = canvas.Canvas(str(path), pagesize=(1200, 500))
+    c.drawImage(str(image_path), 0, 0, width=1200, height=500)
     c.save()
     return path

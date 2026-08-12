@@ -7,10 +7,18 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from .detection import DetectedFileType, detect_file_type
-from .errors import InvalidInputFileError
+from .errors import InvalidInputFileError, UnsupportedFileTypeError
 from .libreoffice import converted_temp, find_libreoffice
-from .models import CanonicalDocument, DocumentMetadata, ExtractionWarning, Severity
+from .models import (
+    CanonicalDocument,
+    DocumentMetadata,
+    ExtractionWarning,
+    Severity,
+    SourceReference,
+    UnitKind,
+)
 from .registry import ExtractorRegistry
+from .security import ArchiveSafetyLimits, validate_zip_archive
 from .validation import validate_document
 
 
@@ -26,13 +34,17 @@ def _sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
 class ExtractionOptions:
     render_word_pages: bool = True
     max_file_size_bytes: int = 512 * 1024 * 1024
+    max_archive_members: int = 100_000
+    max_archive_uncompressed_bytes: int = 2 * 1024 * 1024 * 1024
+    max_archive_single_member_bytes: int = 1024 * 1024 * 1024
     libreoffice_timeout_seconds: int = 180
+    pdf_password: str | None = None
 
 
 class ExtractionEngine:
     def __init__(self, registry: ExtractorRegistry | None = None, options: ExtractionOptions | None = None) -> None:
-        self.registry = registry or ExtractorRegistry()
         self.options = options or ExtractionOptions()
+        self.registry = registry or ExtractorRegistry(pdf_password=self.options.pdf_password)
 
     def inspect(self, path: str | Path) -> DetectedFileType:
         return detect_file_type(path)
@@ -45,15 +57,43 @@ class ExtractionEngine:
             raise InvalidInputFileError(
                 f"Input file is {size} bytes, exceeding the configured {self.options.max_file_size_bytes} byte limit."
             )
+        if detected.is_encrypted_office:
+            raise UnsupportedFileTypeError(
+                "Password-protected modern Office documents are detected but not decrypted yet. "
+                "Decrypt the file in Office/LibreOffice first, then run files-extract again."
+            )
+
+        archive_stats: dict[str, int] | None = None
+        if detected.document_type in {"docx", "docm", "xlsx", "xlsm", "pptx", "pptm"}:
+            archive_stats = validate_zip_archive(
+                source,
+                ArchiveSafetyLimits(
+                    max_members=self.options.max_archive_members,
+                    max_uncompressed_bytes=self.options.max_archive_uncompressed_bytes,
+                    max_single_member_bytes=self.options.max_archive_single_member_bytes,
+                ),
+            )
+
         if detected.is_legacy_office:
-            return self._extract_legacy(source, detected)
-        document = self._extract_native(source, detected, original_source=source)
-        if detected.document_type in {"docx", "docm"}:
-            self._augment_word_pagination(source, document)
+            document = self._extract_legacy(source, detected)
+        else:
+            document = self._extract_native(source, detected, original_source=source)
+            if detected.document_type in {"docx", "docm"}:
+                self._augment_word_pagination(source, document)
+
+        if archive_stats is not None:
+            document.metadata.properties.setdefault("source", {})["archive"] = archive_stats
+        self._ensure_provenance(document)
         validate_document(document)
         return document
 
-    def _metadata(self, original_source: Path, detected: DetectedFileType, extractor_name: str, extractor_version: str | None) -> DocumentMetadata:
+    def _metadata(
+        self,
+        original_source: Path,
+        detected: DetectedFileType,
+        extractor_name: str,
+        extractor_version: str | None,
+    ) -> DocumentMetadata:
         return DocumentMetadata(
             filename=original_source.name,
             extension=detected.extension,
@@ -63,10 +103,22 @@ class ExtractionEngine:
             sha256=_sha256(original_source),
             extractor=extractor_name,
             extractor_version=extractor_version,
-            properties={"source": {"is_legacy_office": detected.is_legacy_office, "is_macro_enabled": detected.is_macro_enabled}},
+            properties={
+                "source": {
+                    "is_legacy_office": detected.is_legacy_office,
+                    "is_macro_enabled": detected.is_macro_enabled,
+                    "is_encrypted_office": detected.is_encrypted_office,
+                }
+            },
         )
 
-    def _extract_native(self, parse_source: Path, detected: DetectedFileType, *, original_source: Path) -> CanonicalDocument:
+    def _extract_native(
+        self,
+        parse_source: Path,
+        detected: DetectedFileType,
+        *,
+        original_source: Path,
+    ) -> CanonicalDocument:
         extractor = self.registry.get(detected)
         metadata = self._metadata(original_source, detected, extractor.name, extractor.version)
         return extractor.extract(parse_source, detected, metadata)
@@ -78,6 +130,14 @@ class ExtractionEngine:
             raise InvalidInputFileError(f"Cannot determine legacy Office family for: {source.name}")
         with converted_temp(source, target, timeout=self.options.libreoffice_timeout_seconds) as converted:
             converted_type = detect_file_type(converted)
+            validate_zip_archive(
+                converted,
+                ArchiveSafetyLimits(
+                    max_members=self.options.max_archive_members,
+                    max_uncompressed_bytes=self.options.max_archive_uncompressed_bytes,
+                    max_single_member_bytes=self.options.max_archive_single_member_bytes,
+                ),
+            )
             document = self._extract_native(converted, converted_type, original_source=source)
             document.metadata.document_type = detected.document_type
             document.metadata.extension = detected.extension
@@ -89,55 +149,94 @@ class ExtractionEngine:
                 "to": converted_type.document_type,
                 "intermediate_filename": converted.name,
             }
-            # OOXML assets are referenced by archive member. The temporary converted
-            # package is deleted when this context exits, so record the conversion
-            # target on each asset. The output layer can re-create the same temporary
-            # package from the original legacy file when asset bytes are materialized.
             for asset in document.assets:
                 if asset.metadata.get("archive_member"):
                     asset.metadata["legacy_conversion_target"] = target
-            document.warnings.append(ExtractionWarning(
-                code="office.legacy.converted",
-                message=f"Legacy {detected.document_type.upper()} was converted to {converted_type.document_type.upper()} with LibreOffice before extraction.",
-                severity=Severity.INFO,
-            ))
+            document.warnings.append(
+                ExtractionWarning(
+                    code="office.legacy.converted",
+                    message=(
+                        f"Legacy {detected.document_type.upper()} was converted to "
+                        f"{converted_type.document_type.upper()} with LibreOffice before extraction."
+                    ),
+                    severity=Severity.INFO,
+                )
+            )
             if target == "docx":
                 self._augment_word_pagination(converted, document)
-            validate_document(document)
             return document
 
     def _augment_word_pagination(self, source: Path, document: CanonicalDocument) -> None:
         if not self.options.render_word_pages:
-            document.warnings.append(ExtractionWarning(
-                code="docx.pagination.disabled",
-                message="Exact rendered page-count verification was disabled.",
-                severity=Severity.INFO,
-            ))
+            document.warnings.append(
+                ExtractionWarning(
+                    code="docx.pagination.disabled",
+                    message="Rendered Word page-count verification was disabled.",
+                    severity=Severity.INFO,
+                )
+            )
             return
         if not find_libreoffice():
-            document.warnings.append(ExtractionWarning(
-                code="docx.pagination.libreoffice_unavailable",
-                message="LibreOffice is not installed, so rendered Word page-count verification could not run. Stored page metadata is still preserved when present.",
-                severity=Severity.INFO,
-            ))
+            document.warnings.append(
+                ExtractionWarning(
+                    code="docx.pagination.libreoffice_unavailable",
+                    message=(
+                        "LibreOffice is not installed, so rendered Word page verification could not run. "
+                        "Stored page metadata is still preserved when present."
+                    ),
+                    severity=Severity.INFO,
+                )
+            )
             return
         try:
             with converted_temp(source, "pdf", timeout=self.options.libreoffice_timeout_seconds) as rendered:
-                rendered_count = len(PdfReader(rendered, strict=False).pages)
+                reader = PdfReader(rendered, strict=False)
+                rendered_pages = []
+                for page_number, page in enumerate(reader.pages, start=1):
+                    try:
+                        page_text = page.extract_text(extraction_mode="layout") or ""
+                    except Exception:
+                        page_text = page.extract_text() or ""
+                    rendered_pages.append({"page_number": page_number, "text": page_text})
+                rendered_count = len(reader.pages)
             word_meta = document.metadata.properties.setdefault("word", {})
             pagination = word_meta.setdefault("pagination", {})
             pagination["rendered_page_count"] = rendered_count
             pagination["renderer"] = "LibreOffice"
+            pagination["rendered_pages"] = rendered_pages
             stored = word_meta.get("stored_page_count")
             if stored is not None and int(stored) != rendered_count:
-                document.warnings.append(ExtractionWarning(
-                    code="docx.page_count.mismatch",
-                    message="The page count stored in the DOCX differs from the current LibreOffice rendering.",
-                    details={"stored_page_count": stored, "rendered_page_count": rendered_count},
-                ))
+                document.warnings.append(
+                    ExtractionWarning(
+                        code="docx.page_count.mismatch",
+                        message="The page count stored in the DOCX differs from the current LibreOffice rendering.",
+                        details={"stored_page_count": stored, "rendered_page_count": rendered_count},
+                    )
+                )
         except Exception as exc:
-            document.warnings.append(ExtractionWarning(
-                code="docx.pagination.failed",
-                message="LibreOffice rendering for Word page-count verification failed; native content extraction is still available.",
-                details={"error": str(exc)},
-            ))
+            document.warnings.append(
+                ExtractionWarning(
+                    code="docx.pagination.failed",
+                    message=(
+                        "LibreOffice rendering for Word page verification failed; "
+                        "native content extraction is still available."
+                    ),
+                    details={"error": str(exc)},
+                )
+            )
+
+    @staticmethod
+    def _ensure_provenance(document: CanonicalDocument) -> None:
+        """Fill a structural source reference for elements that a parser left untagged."""
+        for unit in document.units:
+            for element in unit.elements:
+                if element.source is not None:
+                    continue
+                source = SourceReference(unit_index=unit.index, unit_name=unit.name)
+                if unit.kind == UnitKind.PAGE:
+                    source.page_number = unit.index
+                elif unit.kind == UnitKind.SHEET:
+                    source.sheet_name = unit.name
+                elif unit.kind == UnitKind.SLIDE:
+                    source.slide_number = unit.index
+                element.source = source

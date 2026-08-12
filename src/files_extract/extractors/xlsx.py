@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +62,33 @@ class XlsxExtractor(BaseExtractor):
         unsupported: list[UnsupportedObject] = []
         try:
             metadata.properties["workbook"] = self._workbook_metadata(wb)
+            try:
+                with zipfile.ZipFile(path) as archive:
+                    package_names = set(archive.namelist())
+            except Exception:
+                package_names = set()
+            for prefix, object_type, description in (
+                ("xl/pivotTables/", "xlsx_pivot_table", "Pivot table definitions were detected; source cells are extracted but pivot semantics are not fully normalized."),
+                ("xl/slicers/", "xlsx_slicer", "Excel slicer parts were detected; slicer UI state is not normalized."),
+                ("xl/threadedComments/", "xlsx_threaded_comments", "Threaded comments were detected; openpyxl cell comments do not expose the full threaded conversation."),
+                ("xl/queryTables/", "xlsx_query_table", "External/query table definitions were detected; remote query results are not refreshed."),
+            ):
+                members = sorted(name for name in package_names if name.startswith(prefix) and not name.endswith("/"))
+                if members:
+                    unsupported.append(UnsupportedObject(
+                        object_type=object_type,
+                        status="detected_not_fully_parsed",
+                        description=description,
+                        metadata={"count": len(members), "archive_parts": members},
+                    ))
+            if "xl/connections.xml" in package_names:
+                unsupported.append(UnsupportedObject(
+                    object_type="xlsx_data_connections",
+                    status="detected_not_fully_parsed",
+                    description="Workbook data connections were detected; external data sources are not contacted or refreshed.",
+                    metadata={"archive_part": "xl/connections.xml"},
+                ))
+
             if keep_vba and _safe_attr(wb, "vba_archive") is not None:
                 unsupported.append(UnsupportedObject("vba_project", "detected_not_parsed", "The VBA project is preserved but macro source is not interpreted."))
             external = list(_safe_attr(wb, "_external_links", []) or [])
@@ -70,7 +99,22 @@ class XlsxExtractor(BaseExtractor):
                 units.append(unit); warnings.extend(ws_warnings); unsupported.extend(ws_unsupported)
         finally:
             wb.close(); cached.close()
-        return CanonicalDocument(metadata=metadata, units=units, warnings=warnings, unsupported_objects=unsupported, assets=collect_ooxml_assets(path, detected.document_type))
+        assets = collect_ooxml_assets(path, detected.document_type)
+        asset_by_sha = {asset.sha256: asset.asset_id for asset in assets if asset.sha256}
+        for unit in units:
+            for element in unit.elements:
+                if element.element_type != ElementType.IMAGE:
+                    continue
+                image = element.data.get("image", {})
+                if image.get("sha256") in asset_by_sha:
+                    image["asset_id"] = asset_by_sha[image["sha256"]]
+        return CanonicalDocument(
+            metadata=metadata,
+            units=units,
+            warnings=warnings,
+            unsupported_objects=unsupported,
+            assets=assets,
+        )
 
     def _workbook_metadata(self, wb: Any) -> dict[str, Any]:
         p = wb.properties
@@ -111,6 +155,24 @@ class XlsxExtractor(BaseExtractor):
                 validations.append({"type": _safe_attr(v, "type"), "operator": _safe_attr(v, "operator"), "ranges": str(_safe_attr(v, "sqref", "")), "formula1": _safe_attr(v, "formula1"), "formula2": _safe_attr(v, "formula2"), "allow_blank": _safe_attr(v, "allowBlank")})
         except Exception as exc:
             warnings.append(ExtractionWarning("xlsx.data_validations.partial", "One or more data validation rules could not be fully read.", source=source, details={"error": str(exc)}))
+        def _header_footer(value: Any) -> dict[str, Any]:
+            return {
+                "left": _safe_attr(_safe_attr(value, "left"), "text"),
+                "center": _safe_attr(_safe_attr(value, "center"), "text"),
+                "right": _safe_attr(_safe_attr(value, "right"), "text"),
+            }
+
+        row_dimensions = {
+            str(i): {"height": _safe_attr(d, "height"), "hidden": _safe_attr(d, "hidden"), "outline_level": _safe_attr(d, "outlineLevel")}
+            for i, d in ws.row_dimensions.items()
+            if _safe_attr(d, "height") is not None or _safe_attr(d, "hidden") or _safe_attr(d, "outlineLevel", 0)
+        }
+        column_dimensions = {
+            str(k): {"width": _safe_attr(d, "width"), "hidden": _safe_attr(d, "hidden"), "outline_level": _safe_attr(d, "outlineLevel")}
+            for k, d in ws.column_dimensions.items()
+            if _safe_attr(d, "width") is not None or _safe_attr(d, "hidden") or _safe_attr(d, "outlineLevel", 0)
+        }
+
         meta = {
             "state": ws.sheet_state, "max_row": ws.max_row, "max_column": ws.max_column,
             "merged_ranges": merged, "hidden_rows": hidden_rows, "hidden_columns": hidden_cols,
@@ -118,6 +180,21 @@ class XlsxExtractor(BaseExtractor):
             "auto_filter": _safe_attr(ws.auto_filter, "ref"), "print_area": str(ws.print_area) if ws.print_area else None,
             "print_title_rows": _safe_attr(ws, "print_title_rows"), "print_title_cols": _safe_attr(ws, "print_title_cols"),
             "tables": tables, "data_validations": validations,
+            "headers_footers": {
+                "odd_header": _header_footer(ws.oddHeader),
+                "odd_footer": _header_footer(ws.oddFooter),
+                "even_header": _header_footer(ws.evenHeader),
+                "even_footer": _header_footer(ws.evenFooter),
+                "first_header": _header_footer(ws.firstHeader),
+                "first_footer": _header_footer(ws.firstFooter),
+            },
+            "row_dimensions": row_dimensions,
+            "column_dimensions": column_dimensions,
+            "sheet_view": {
+                "show_grid_lines": _safe_attr(ws.sheet_view, "showGridLines"),
+                "zoom_scale": _safe_attr(ws.sheet_view, "zoomScale"),
+                "right_to_left": _safe_attr(ws.sheet_view, "rightToLeft"),
+            },
         }
         elements = [DocumentElement(f"sheet-{idx}-metadata", ElementType.METADATA, 0, data=meta, source=source)]
         order = 1
@@ -142,7 +219,33 @@ class XlsxExtractor(BaseExtractor):
         for t_idx, t in enumerate(tables, start=1):
             elements.append(DocumentElement(f"sheet-{idx}-table-{t_idx}", ElementType.TABLE, order, data=t, source=source)); order += 1
         for image_idx, image in enumerate(list(_safe_attr(ws, "_images", []) or []), start=1):
-            unsupported.append(UnsupportedObject("xlsx_image", "asset_extracted_structure_partial", "Worksheet image bytes are extracted to assets; anchor/layout is recorded but image semantics are not interpreted.", source=source, metadata={"index": image_idx, "format": _safe_attr(image, "format"), "width": _safe_attr(image, "width"), "height": _safe_attr(image, "height"), **_anchor_metadata(_safe_attr(image, "anchor"))}))
+            image_meta = {
+                "index": image_idx,
+                "format": _safe_attr(image, "format"),
+                "width": _safe_attr(image, "width"),
+                "height": _safe_attr(image, "height"),
+                **_anchor_metadata(_safe_attr(image, "anchor")),
+            }
+            try:
+                payload = image._data()
+                image_meta["sha256"] = hashlib.sha256(payload).hexdigest()
+            except Exception:
+                pass
+            elements.append(DocumentElement(
+                f"sheet-{idx}-image-{image_idx}",
+                ElementType.IMAGE,
+                order,
+                data={"image": image_meta},
+                source=source,
+            ))
+            order += 1
+            unsupported.append(UnsupportedObject(
+                "xlsx_image",
+                "asset_extracted_structure_partial",
+                "Worksheet image bytes are extracted and anchor/layout is recorded; image semantics are not interpreted.",
+                source=source,
+                metadata=image_meta,
+            ))
         for chart_idx, chart in enumerate(list(_safe_attr(ws, "_charts", []) or []), start=1):
             unsupported.append(UnsupportedObject("xlsx_chart", "detected_partially_parsed", "A worksheet chart was detected; chart rendering and full series normalization are not implemented yet.", source=source, metadata={"index": chart_idx, "style": _safe_attr(chart, "style"), **_anchor_metadata(_safe_attr(chart, "anchor"))}))
         return DocumentUnit(idx, UnitKind.SHEET, ws.title, elements, meta), warnings, unsupported

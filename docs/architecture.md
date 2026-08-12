@@ -5,57 +5,58 @@
 ```text
 input file
    ↓
-signature + OOXML detection
+signature / OLE / OOXML detection
    ↓
-legacy Office? ── yes ──→ LibreOffice local conversion
+resource & archive safety checks
+   ↓
+legacy Office? ── yes ──→ isolated LibreOffice conversion
    ↓ no                    ↓
 extractor registry ←───────┘
    ↓
-PDF / DOCX / XLSX / PPTX native extractor
+PDF / DOCX / XLSX / PPTX extractor
    ↓
-canonical document model
+canonical document + assets + warnings
    ↓
-validation
+provenance completion + validation
    ↓
-JSON + Markdown + assets + manifest
+document.json + document.md + assets/ + manifest.json
 ```
-
-## Canonical model
-
-Every result contains:
-
-- `metadata`: source identity, SHA-256, format, extractor/version and source properties;
-- `units`: ordered `page`, `sheet`, `slide` or `document` units;
-- `elements`: ordered content objects with source provenance;
-- `assets`: embedded media/attachment references and checksums;
-- `warnings`: recoverable fidelity/processing limitations;
-- `unsupported_objects`: detected rich objects not fully normalized yet.
-
-The schema deliberately keeps format-specific information inside `data`/`metadata` while exposing a stable top-level model to downstream code.
 
 ## Format strategy
 
-### XLSX/XLSM
+### Excel
 
-`openpyxl` is used for native workbook fidelity. Formula and data-only workbooks are opened in parallel so formulas and cached results can both be retained when cached values are present.
+`openpyxl` reads the workbook twice: formula mode and data-only mode. This lets the canonical cell retain the formula together with a cached result when Excel stored one. Package inspection supplements the library for VBA, pivot/query/slicer and other rich parts.
 
-### DOCX/DOCM
+### Word
 
-`python-docx` provides the high-level object model. Direct OOXML reads supplement it for content such as footnotes/endnotes, text boxes, tracked changes and package-part detection. LibreOffice is used only for renderer-dependent pagination verification and legacy conversion.
+`python-docx` supplies ordered body blocks, comments, sections, stories and high-level formatting. Direct OOXML inspection supplements it for footnotes/endnotes, text boxes, tracked changes, content controls, field instructions, Office Math and unsupported package parts. Run inner-content markers keep embedded pictures in run order. LibreOffice rendering provides renderer-derived page boundaries.
 
-### PPTX/PPTM
+### PowerPoint
 
-`python-pptx` provides slide/shape order, text, tables, charts, pictures and notes. Package inspection detects unsupported SmartArt/OLE/comment parts and VBA.
+`python-pptx` supplies slide order, shapes, z-order, text, tables, charts, pictures and notes. The extractor also records accessibility text and inherited layout/master content. OOXML inspection detects SmartArt, comments, OLE and VBA.
 
 ### PDF
 
-Docling is the preferred semantic/layout backend when installed. Its reading-order items and provenance are normalized by page. `pypdf` always supplies low-level page metadata, annotations/links, forms, images, attachments and a fallback text extractor.
+Docling is the preferred layout/OCR/table backend. `pypdf` is always used for low-level PDF features and as the fallback text backend. When Tesseract Arabic/English is installed, Docling is configured to prefer those OCR languages; otherwise Docling chooses an available OCR backend.
+
+## Canonical model
+
+All formats share:
+
+- source metadata and SHA-256;
+- ordered structural units;
+- ordered elements with source provenance;
+- asset references with hashes and archive/page provenance;
+- warnings and unsupported-object declarations.
+
+Format-specific detail remains in `data`/`metadata` so the common schema does not discard fidelity.
 
 ## Security boundaries
 
-- Processing is local by default; the engine does not upload documents.
-- File type detection checks signatures/package structure rather than trusting extensions.
-- File size is bounded (512 MiB by default, configurable via CLI).
-- Asset output paths are validated against path traversal.
-- LibreOffice is run headless with an isolated temporary user profile and a timeout.
-- Temporary conversion directories are removed automatically.
+- no source-document upload is performed by the engine;
+- file size and OOXML expanded-size/member limits are enforced before parsing;
+- asset output paths are validated;
+- LibreOffice runs headless in an isolated temporary profile with timeout;
+- potentially active extracted content is marked and never executed;
+- passwords are never serialized to canonical output.
