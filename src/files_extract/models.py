@@ -6,7 +6,7 @@ from typing import Any
 
 from .serialization import to_json_safe
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 
 class UnitKind(str, Enum):
@@ -26,6 +26,8 @@ class ElementType(str, Enum):
     LINK = "link"
     NOTE = "note"
     METADATA = "metadata"
+    FORMULA = "formula"
+    CODE = "code"
     OTHER = "other"
 
 
@@ -55,6 +57,7 @@ class SourceReference:
     column: int | None = None
     cell: str | None = None
     bbox: BoundingBox | None = None
+    archive_part: str | None = None
 
 
 @dataclass(slots=True)
@@ -82,6 +85,8 @@ class AssetReference:
     original_name: str | None = None
     output_path: str | None = None
     media_type: str | None = None
+    sha256: str | None = None
+    size_bytes: int | None = None
     source: SourceReference | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -132,6 +137,10 @@ class CanonicalDocument:
     @property
     def unit_count(self) -> int:
         return len(self.units)
+
+    @property
+    def element_count(self) -> int:
+        return sum(len(unit.elements) for unit in self.units)
 
     def to_dict(self) -> dict[str, Any]:
         return to_json_safe(self)

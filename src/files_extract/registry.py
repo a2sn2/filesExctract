@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from .detection import DetectedFileType
 from .errors import UnsupportedFileTypeError
-from .extractors import BaseExtractor, XlsxExtractor
+from .extractors import BaseExtractor, DocxExtractor, PdfExtractor, PptxExtractor, XlsxExtractor
 
 
 class ExtractorRegistry:
     def __init__(self, extractors: list[BaseExtractor] | None = None) -> None:
-        self._extractors = extractors or [XlsxExtractor()]
+        self._extractors = extractors or [XlsxExtractor(), DocxExtractor(), PptxExtractor(), PdfExtractor()]
 
     @property
     def extractors(self) -> tuple[BaseExtractor, ...]:
@@ -18,6 +18,5 @@ class ExtractorRegistry:
             if extractor.supports(detected):
                 return extractor
         raise UnsupportedFileTypeError(
-            f"No extractor is implemented yet for '{detected.document_type}'. "
-            "Current milestone supports XLSX/XLSM; PDF, DOCX and PPTX are planned next."
+            f"No extractor is available for '{detected.document_type}'. Supported native types: PDF, DOCX/DOCM, XLSX/XLSM, PPTX/PPTM. Legacy DOC/XLS/PPT require LibreOffice conversion."
         )

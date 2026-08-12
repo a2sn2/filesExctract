@@ -1,22 +1,54 @@
-# Canonical Document Schema
+# Canonical Document Schema v1.1
 
-`files-extract` normalizes every supported source into the same top-level shape so downstream systems do not need format-specific logic.
+Every source format is normalized to the same top-level object.
 
-## Top-level fields
+```text
+CanonicalDocument
+├── schema_version
+├── metadata
+├── units[]
+│   ├── index
+│   ├── kind: document | page | sheet | slide
+│   ├── name
+│   ├── metadata
+│   └── elements[]
+├── assets[]
+├── warnings[]
+└── unsupported_objects[]
+```
 
-- `schema_version`: version of the canonical representation.
-- `metadata`: source identity, hash, detected type, extractor and source properties.
-- `units`: ordered source units. A unit can be a page, sheet, slide or whole-document unit.
-- `warnings`: extraction conditions that may affect completeness or interpretation.
-- `unsupported_objects`: detected objects that are not fully represented yet. Nothing detectable should be silently discarded.
-- `assets`: extracted binary assets and provenance references.
+## Metadata
+
+`metadata` identifies the original source rather than a temporary converted file. It includes source filename, extension/type, media type, byte size, SHA-256, extractor identity/version and format-specific properties.
+
+## Units
+
+A unit is the stable structural container of a source:
+
+- PDF → `page`
+- XLSX/XLSM → `sheet`
+- PPTX/PPTM → `slide`
+- DOCX/DOCM → `document` because native Word content is flow-based rather than page-bound
+
+For Word, stored and LibreOffice-rendered page counts are preserved under `metadata.properties.word`; exact paragraph-to-rendered-page reconciliation is tracked separately from native block order.
+
+## Elements
+
+Each element has a globally unique `element_id`, an order within its unit, a broad `element_type`, optional text/Markdown, format-specific `data`, optional child elements and source provenance.
+
+Element types include headings, paragraphs, lists, tables, cells, images, links, notes, formulas, code, metadata and other rich objects.
 
 ## Provenance
 
-Every element may contain a `source` reference. Depending on source format it can include page number, sheet name, slide number, row, column, cell coordinate or a bounding box.
+`SourceReference` can point to page, sheet, slide, row, column, cell coordinate, bounding box or an OOXML archive part. Bounding boxes include a coordinate-system label because PDF/layout engines can use different origins.
 
-## Spreadsheet mapping
+## Assets
 
-An XLSX workbook is represented as ordered `sheet` units. Each emitted cell is a `cell` element with its address, row/column coordinates, raw value, formula when present, cached formula value when available, data type, number format, hyperlink/comment metadata and hidden row/column state.
+An asset reference contains an ID, media type, original/output name, SHA-256, byte size and source metadata. The CLI materializes safe asset paths under the extraction output directory.
 
-Worksheet-level metadata currently includes sheet state, dimensions, merged ranges, hidden rows/columns, freeze panes, filters, print settings, table definitions and data validations.
+## Completeness
+
+- `warnings` records recoverable extraction/fidelity limitations.
+- `unsupported_objects` records detected rich content that is not fully normalized.
+
+The engine's contract is that detectable unsupported content is reported rather than silently discarded.

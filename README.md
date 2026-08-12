@@ -1,114 +1,157 @@
 # filesExctract
 
-Local-first document extraction engine for PDF, Word, Excel, and PowerPoint files.
+`files-extract` is a local-first document extraction engine for PDF, Word, Excel and PowerPoint files. It converts source documents into a common structured JSON model plus Markdown while preserving source units (pages/sheets/slides), order, tables, cells, formulas, notes, links, metadata, embedded media references and explicit completeness warnings.
 
-The product goal is to extract document content while preserving structural context such as pages, sheets, slides, tables, cells, formulas, reading order, metadata and source references, then normalize the result into machine-friendly structured JSON and Markdown/text.
+> The repository is currently named `filesExctract`. The Python package and command use the corrected names `files_extract` and `files-extract`.
 
-> Repository name is currently `filesExctract`. The installable Python package and CLI use the corrected product name `files-extract` / `files_extract`.
+## Supported formats
 
-## Current milestone
+| Format | Native extraction | Structural unit | Notes |
+|---|---|---|---|
+| PDF | Yes | page | Docling when installed, pypdf fallback; images, links, forms, metadata, attachments |
+| DOCX / DOCM | Yes | document | paragraphs, runs, headings, lists, tables/nested tables, comments, headers/footers, sections, foot/endnotes, text boxes, revisions, media |
+| XLSX / XLSM | Yes | sheet | cells, formulas/cached values, comments, hyperlinks, merged ranges, hidden rows/columns/sheets, tables, validations, media |
+| PPTX / PPTM | Yes | slide | shape z-order, text/runs, tables, charts, notes, pictures, hidden slides, media |
+| DOC / XLS / PPT | Yes via LibreOffice | corresponding modern unit | converted locally before extraction |
 
-The foundation and first native Excel extractor are implemented on the development branch.
+## Output package
 
-Implemented now:
+For `sample.xlsx`, the default output is:
 
-- Canonical document schema with provenance references.
-- File type detection using signatures/OOXML package structure instead of extension alone.
-- Extractor registry and validation layer.
-- CLI with `inspect` and `extract` commands.
-- JSON and Markdown renderers.
-- XLSX/XLSM native extraction using openpyxl.
-- Workbook/sheet metadata, ordered sheets and sheet visibility.
-- Cell coordinates, values, formulas, cached formula values when present, data types and number formats.
-- Comments and hyperlinks.
-- Merged ranges, hidden rows/columns, freeze panes and filters.
-- Excel table definitions and data validation rules.
-- Detection/reporting of currently unsupported embedded charts/images, VBA projects and external workbook links rather than silently dropping them.
-- Automated tests for detection, extraction and CLI output.
+```text
+sample_extracted/
+├── document.json
+├── document.md
+├── manifest.json
+└── assets/
+    └── ...embedded media and PDF attachments/images...
+```
 
-Planned next: asset extraction, deeper XLSX fidelity, DOCX, PPTX, PDF/Docling, OCR, LibreOffice conversion, Docker and CI.
+`document.json` is the canonical machine-readable result. `document.md` is derived from the same canonical object for humans, RAG and LLM workflows. `manifest.json` contains counts plus SHA-256 checksums for written outputs.
 
-## Requirements
+## Install
 
-- Python 3.11+
+Python 3.11+ is required.
 
-## Local setup
+### Core
+
+Core extraction works for all four modern families. PDF uses pypdf when Docling is not installed.
 
 ```bash
-git clone https://github.com/a2sn2/filesExctract.git
-cd filesExctract
-git switch feat/foundation
-
 python -m venv .venv
 ```
 
-Activate the environment:
-
-### Windows PowerShell
+Windows PowerShell:
 
 ```powershell
 .venv\Scripts\Activate.ps1
-```
-
-### Linux/macOS
-
-```bash
-source .venv/bin/activate
-```
-
-Install the project:
-
-```bash
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 ```
 
-Run tests:
+Linux/macOS:
 
 ```bash
-pytest
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e ".[dev]"
 ```
 
-## Usage
+### Full PDF/OCR backend
 
-Inspect a file:
+For semantic PDF layout/table processing and OCR support, install the full extra:
+
+```bash
+pip install -e ".[full,dev]"
+```
+
+Docling is used automatically when available. If it is absent or conversion fails, PDF extraction falls back to pypdf and records that fact in `warnings`.
+
+### LibreOffice
+
+LibreOffice is optional for modern files but required for:
+
+- legacy `.doc`, `.xls`, `.ppt` conversion;
+- rendered Word page-count verification.
+
+Check the machine:
+
+```bash
+files-extract doctor
+```
+
+## CLI
+
+Inspect only:
 
 ```bash
 files-extract inspect sample.xlsx
 ```
 
-Extract a workbook:
+Extract one file:
 
 ```bash
 files-extract extract sample.xlsx
 ```
 
-By default the result is written next to the source file:
-
-```text
-sample_extracted/
-├── document.json
-└── document.md
-```
-
-Choose another output directory:
+Choose an output directory:
 
 ```bash
-files-extract extract sample.xlsx -o output/sample
+files-extract extract sample.docx -o output/sample
 ```
 
-You can also run the CLI without the installed script entry point:
+Do not write embedded assets:
 
 ```bash
-python -m files_extract extract sample.xlsx
+files-extract extract sample.pptx --no-assets
 ```
 
-## Output contract
+Skip LibreOffice Word page rendering:
 
-`document.json` is the canonical machine-readable output. `document.md` is a human/LLM-friendly representation derived from the same canonical object.
+```bash
+files-extract extract sample.docx --no-render-word-pages
+```
 
-The canonical JSON keeps source provenance so downstream code can trace extracted data back to a page/sheet/slide/cell. See [`docs/canonical-schema.md`](docs/canonical-schema.md).
+Batch extraction:
 
-## Completeness rule
+```bash
+files-extract batch ./documents -o ./output --recursive
+```
 
-Detected content that is not fully parsed must not disappear silently. The engine records partial or unsupported objects under `warnings` or `unsupported_objects`, which lets future validation and QA measure extraction completeness explicitly.
+Environment diagnostics:
+
+```bash
+files-extract doctor --json
+```
+
+## Completeness contract
+
+Detected content must not silently disappear. Content that can be represented is emitted as canonical elements/assets. Rich objects that are only partially normalized are listed under `unsupported_objects`; recoverable extraction limitations are listed under `warnings`.
+
+Examples include VBA projects, unresolved external workbook links, SmartArt, OLE packages and cases where Docling/OCR is unavailable.
+
+## Word pagination
+
+DOCX is flow-based, so paragraph-to-page mapping is renderer-dependent. The extractor preserves Word's stored extended page count when present and, by default, asks LibreOffice to render the document to PDF and records the rendered page count. A mismatch is reported as a warning rather than hidden.
+
+## Development and tests
+
+```bash
+pytest
+```
+
+Run only fast tests:
+
+```bash
+pytest -m "not integration"
+```
+
+Run LibreOffice integration tests:
+
+```bash
+pytest -m integration
+```
+
+The test corpus is generated during tests, so the repository does not need to ship private documents.
+
+See `docs/architecture.md` and `docs/capability-matrix.md` for the internal design and fidelity status.

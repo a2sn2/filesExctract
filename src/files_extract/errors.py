@@ -16,3 +16,7 @@ class ExtractionFailedError(FilesExtractError):
 
 class DocumentValidationError(FilesExtractError):
     """Raised when canonical output violates required invariants."""
+
+
+class ExternalToolError(FilesExtractError):
+    """Raised when an optional external converter fails."""

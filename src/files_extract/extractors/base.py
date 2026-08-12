@@ -16,10 +16,5 @@ class BaseExtractor(ABC):
         return detected.document_type in self.supported_types
 
     @abstractmethod
-    def extract(
-        self,
-        path: Path,
-        detected: DetectedFileType,
-        metadata: DocumentMetadata,
-    ) -> CanonicalDocument:
+    def extract(self, path: Path, detected: DetectedFileType, metadata: DocumentMetadata) -> CanonicalDocument:
         raise NotImplementedError
