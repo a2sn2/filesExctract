@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from docx import Document
@@ -32,11 +33,16 @@ def runtime_env(app: Path) -> dict[str, str]:
     return env
 
 
-def run_backend(app: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run_backend(app: Path, *args: str, check: bool = True, password_env: str | None = None) -> subprocess.CompletedProcess[str]:
     python = app / "runtime" / "python" / "python.exe"
     cmd = [str(python), "-m", "files_extract", *args]
+    env = runtime_env(app)
+    if password_env is not None:
+        env["FILES_EXTRACT_PASSWORD"] = password_env
+    else:
+        env.pop("FILES_EXTRACT_PASSWORD", None)
     print(">", " ".join(cmd), flush=True)
-    proc = subprocess.run(cmd, env=runtime_env(app), capture_output=True, text=True, check=False, timeout=420)
+    proc = subprocess.run(cmd, env=env, capture_output=True, text=True, check=False, timeout=420)
     if proc.stdout:
         print(proc.stdout)
     if proc.stderr:
@@ -151,12 +157,38 @@ def libreoffice_convert(app: Path, source: Path, extension: str, out: Path) -> P
     return expected
 
 
+def assert_gui_launches(app: Path) -> None:
+    launcher = app / "FilesExtract.exe"
+    process = subprocess.Popen(
+        [str(launcher)],
+        env=runtime_env(app),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        time.sleep(4)
+        assert process.poll() is None, "FilesExtract GUI exited during startup smoke test"
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: smoke_full.py <app-root>")
     app = Path(sys.argv[1]).resolve()
     assert (app / "FilesExtract.exe").is_file(), app
     assert (app / "runtime" / "python" / "python.exe").is_file()
+    freeze = app / "runtime-freeze.txt"
+    assert freeze.is_file(), "runtime-freeze.txt is missing"
+    freeze_text = freeze.read_text(encoding="utf-8").lower()
+    for dependency in ("docling==", "onnxruntime==", "msoffcrypto-tool==", "openpyxl=="):
+        assert dependency in freeze_text, (dependency, freeze_text[:2000])
 
     version = run_backend(app, "--version")
     assert "0.4.0" in version.stdout
@@ -212,6 +244,9 @@ def main() -> int:
         run_backend(app, "extract", str(fixtures["encrypted"]), "-o", str(encrypted_out), "--password", "secret-test-password")
         assert (encrypted_out / "document.json").is_file()
 
+        # Exercise the same secret-delivery path used by the desktop UI: the
+        # password is inherited through the private child environment rather
+        # than appearing in the process command line.
         encrypted_office_out = output / "encrypted-office"
         run_backend(
             app,
@@ -219,8 +254,7 @@ def main() -> int:
             str(fixtures["encrypted_xlsx"]),
             "-o",
             str(encrypted_office_out),
-            "--password",
-            "office-test-password",
+            password_env="office-test-password",
         )
         encrypted_office_payload = json_payload(encrypted_office_out / "document.json")
         security = encrypted_office_payload.get("metadata", {}).get("properties", {}).get("security", {})
@@ -249,6 +283,7 @@ def main() -> int:
         )
         assert launcher.returncode == 0, launcher.stderr
 
+    assert_gui_launches(app)
     print("WINDOWS FULL PRODUCT SMOKE: PASS")
     return 0
 
