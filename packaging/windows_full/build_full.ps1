@@ -51,6 +51,12 @@ Write-Host "== Full Python extraction runtime =="
 python -m pip install --upgrade --target $sitePackages ".[full]"
 if ($LASTEXITCODE -ne 0) { throw "Failed to populate the embedded Python runtime." }
 
+# Record the exact Python distributions that landed in the private runtime.
+$freezeCode = "import importlib.metadata as m; rows=sorted({f'{(d.metadata.get('Name') or d.metadata.get('Summary') or 'unknown')}=={d.version}' for d in m.distributions()}); print(chr(10).join(rows))"
+$freezeOutput = & (Join-Path $pythonDir "python.exe") -c $freezeCode
+if ($LASTEXITCODE -ne 0) { throw "Could not enumerate the embedded Python runtime." }
+$freezeOutput | Set-Content -Path (Join-Path $app "runtime-freeze.txt") -Encoding UTF8
+
 Write-Host "== Offline Docling models =="
 & docling-tools models download layout tableformer -o $models
 if ($LASTEXITCODE -ne 0) { throw "Failed to prefetch Docling layout/table models." }
@@ -81,9 +87,10 @@ $tessDest = Join-Path $tools "tesseract"
 Copy-Item $tessRoot $tessDest -Recurse -Force
 $tessdata = Join-Path $tessDest "tessdata"
 New-Item -ItemType Directory -Force -Path $tessdata | Out-Null
-Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata" -OutFile (Join-Path $tessdata "eng.traineddata")
-Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/ara.traineddata" -OutFile (Join-Path $tessdata "ara.traineddata")
-Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tesseract/main/LICENSE" -OutFile (Join-Path $app "LICENSE-TESSERACT.txt")
+$tessdataCommit = "87416418657359cb625c412a48b6e1d6d41c29bd"
+Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/$tessdataCommit/eng.traineddata" -OutFile (Join-Path $tessdata "eng.traineddata")
+Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/$tessdataCommit/ara.traineddata" -OutFile (Join-Path $tessdata "ara.traineddata")
+Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tesseract/5.5.3/LICENSE" -OutFile (Join-Path $app "LICENSE-TESSERACT.txt")
 
 Write-Host "== LibreOffice =="
 # The official TDF mirror list publishes both the exact MSI filename and its
@@ -147,6 +154,7 @@ $buildInfo = [ordered]@{
     build_time_utc = [DateTime]::UtcNow.ToString("o")
     embedded_python = $pyVersion
     tesseract = $tessVersion
+    tessdata_fast_commit = $tessdataCommit
     libreoffice = $loVersion
     offline_docling_models = @("layout", "tableformer")
     bundled_ocr_languages = @("ara", "eng")
