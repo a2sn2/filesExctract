@@ -22,7 +22,7 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[full,dev]" pip-licenses
 if ($LASTEXITCODE -ne 0) { throw "Failed to install build dependencies." }
 
-Write-Host "== GUI =="
+Write-Host "== Extraction GUI =="
 dotnet publish "packaging/windows_full/gui/FilesExtract.Gui.csproj" `
     -c Release `
     -r win-x64 `
@@ -31,7 +31,18 @@ dotnet publish "packaging/windows_full/gui/FilesExtract.Gui.csproj" `
     -p:IncludeNativeLibrariesForSelfExtract=true `
     -p:PublishTrimmed=false `
     -o $app
-if ($LASTEXITCODE -ne 0) { throw "Failed to publish the Windows GUI." }
+if ($LASTEXITCODE -ne 0) { throw "Failed to publish the Windows extraction GUI." }
+
+Write-Host "== Conversion GUI =="
+dotnet publish "packaging/windows_full/converter_gui/FilesConvert.Gui.csproj" `
+    -c Release `
+    -r win-x64 `
+    --self-contained true `
+    -p:PublishSingleFile=true `
+    -p:IncludeNativeLibrariesForSelfExtract=true `
+    -p:PublishTrimmed=false `
+    -o $app
+if ($LASTEXITCODE -ne 0) { throw "Failed to publish the Windows conversion GUI." }
 
 Write-Host "== Embedded Python =="
 $pyVersion = "3.12.10"
@@ -47,11 +58,10 @@ Lib\site-packages
 import site
 "@ | Set-Content -Path $pth.FullName -Encoding ASCII
 
-Write-Host "== Full Python extraction runtime =="
+Write-Host "== Full Python extraction/conversion runtime =="
 python -m pip install --upgrade --target $sitePackages ".[full]"
 if ($LASTEXITCODE -ne 0) { throw "Failed to populate the embedded Python runtime." }
 
-# Record the exact Python distributions that landed in the private runtime.
 $freezeCode = @'
 import importlib.metadata as m
 rows = []
@@ -69,25 +79,19 @@ Write-Host "== Offline Docling models =="
 if ($LASTEXITCODE -ne 0) { throw "Failed to prefetch Docling layout/table models." }
 
 Write-Host "== Tesseract =="
-# Use a checksum-pinned Windows installer rather than a package manager so the
-# resulting product is reproducible and independent from Chocolatey state.
 $tessVersion = "5.5.3.20260724"
 $tessInstaller = Join-Path $env:RUNNER_TEMP "tesseract-ocr-w64-setup-$tessVersion.exe"
 $tessUrl = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-$tessVersion.exe"
 $tessExpectedSha256 = "bee9e3434bd94fd65387d9be28cd467a41f61b1275383b55b0f59a1331270ae4"
 Invoke-WebRequest $tessUrl -OutFile $tessInstaller
 $tessActualSha256 = (Get-FileHash $tessInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($tessActualSha256 -ne $tessExpectedSha256) {
-    throw "Tesseract installer checksum mismatch. Expected $tessExpectedSha256, got $tessActualSha256."
-}
+if ($tessActualSha256 -ne $tessExpectedSha256) { throw "Tesseract installer checksum mismatch. Expected $tessExpectedSha256, got $tessActualSha256." }
 $tessInstallRoot = Join-Path $env:RUNNER_TEMP "FilesExtract-Tesseract"
 if (Test-Path $tessInstallRoot) { Remove-Item $tessInstallRoot -Recurse -Force }
 $process = Start-Process -FilePath $tessInstaller -ArgumentList "/S", "/D=$tessInstallRoot" -Wait -PassThru -NoNewWindow
 if ($process.ExitCode -ne 0) { throw "Tesseract installer failed with exit code $($process.ExitCode)." }
 $tessExe = Join-Path $tessInstallRoot "tesseract.exe"
-if (-not (Test-Path $tessExe)) {
-    $tessExe = Get-ChildItem $tessInstallRoot -Filter "tesseract.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
-}
+if (-not (Test-Path $tessExe)) { $tessExe = Get-ChildItem $tessInstallRoot -Filter "tesseract.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
 if (-not $tessExe -or -not (Test-Path $tessExe)) { throw "Tesseract executable was not found after verified installation." }
 $tessRoot = Split-Path $tessExe -Parent
 $tessDest = Join-Path $tools "tesseract"
@@ -100,18 +104,13 @@ Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast
 Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tesseract/5.5.3/LICENSE" -OutFile (Join-Path $app "LICENSE-TESSERACT.txt")
 
 Write-Host "== LibreOffice =="
-# The official TDF mirror list publishes both the exact MSI filename and its
-# SHA-256. Administrative extraction keeps LibreOffice private to FilesExtract;
-# the target PC does not need LibreOffice installed globally.
 $loVersion = "26.2.5"
 $loMsi = Join-Path $env:RUNNER_TEMP "LibreOffice_${loVersion}_Win_x86-64.msi"
 $loUrl = "https://download.documentfoundation.org/libreoffice/stable/$loVersion/win/x86_64/LibreOffice_${loVersion}_Win_x86-64.msi"
 $loExpectedSha256 = "f15ba07bfcb0186986cf3171063506f5d207c11f8cc051ba0d135209e9e915f9"
 Invoke-WebRequest $loUrl -OutFile $loMsi -MaximumRedirection 10
 $loActualSha256 = (Get-FileHash $loMsi -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($loActualSha256 -ne $loExpectedSha256) {
-    throw "LibreOffice MSI checksum mismatch. Expected $loExpectedSha256, got $loActualSha256."
-}
+if ($loActualSha256 -ne $loExpectedSha256) { throw "LibreOffice MSI checksum mismatch. Expected $loExpectedSha256, got $loActualSha256." }
 $loAdminRoot = Join-Path $env:RUNNER_TEMP "FilesExtract-LibreOffice-Admin"
 if (Test-Path $loAdminRoot) { Remove-Item $loAdminRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $loAdminRoot | Out-Null
@@ -131,7 +130,6 @@ if ($loLicense) { Copy-Item $loLicense.FullName (Join-Path $app "LICENSE-LIBREOF
 Write-Host "== Distribution metadata =="
 Copy-Item "packaging/windows_full/README-WINDOWS-FULL.txt" (Join-Path $app "README.txt") -Force
 if (Test-Path "CHANGELOG.md") { Copy-Item "CHANGELOG.md" (Join-Path $app "CHANGELOG.md") -Force }
-
 & pip-licenses --format=markdown --with-urls --output-file (Join-Path $app "THIRD-PARTY-PYTHON-LICENSES.md")
 if ($LASTEXITCODE -ne 0) { throw "pip-licenses failed." }
 
@@ -152,10 +150,21 @@ set "PYTHONUTF8=1"
 exit /b %ERRORLEVEL%
 "@ | Set-Content -Path (Join-Path $app "files-extract-cli.cmd") -Encoding ASCII
 
+@"
+@echo off
+setlocal
+set "ROOT=%~dp0"
+set "FILES_EXTRACT_BUNDLE_ROOT=%ROOT%"
+set "PATH=%ROOT%tools\libreoffice\program;%PATH%"
+set "PYTHONUTF8=1"
+"%ROOT%runtime\python\python.exe" -m files_extract.conversion %*
+exit /b %ERRORLEVEL%
+"@ | Set-Content -Path (Join-Path $app "files-convert-cli.cmd") -Encoding ASCII
+
 $commit = (& git rev-parse HEAD).Trim()
 $buildInfo = [ordered]@{
     product = "FilesExtract"
-    version = "0.4.0"
+    version = "0.5.0"
     platform = "windows-x64"
     source_commit = $commit
     build_time_utc = [DateTime]::UtcNow.ToString("o")
@@ -165,6 +174,8 @@ $buildInfo = [ordered]@{
     libreoffice = $loVersion
     offline_docling_models = @("layout", "tableformer")
     bundled_ocr_languages = @("ara", "eng")
+    applications = @("FilesExtract.exe", "FilesConvert.exe")
+    conversion_modes = @("exact-layout")
 }
 $buildInfo | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $app "build-info.json") -Encoding UTF8
 
