@@ -6,7 +6,7 @@
 #endif
 
 #define MyAppName "FilesExtract"
-#define MyAppVersion "0.4.0"
+#define MyAppVersion "0.5.0"
 #define MyAppPublisher "ALHassan ALShami"
 #define MyAppExeName "FilesExtract.exe"
 
@@ -15,18 +15,19 @@ AppId={{A16AF1D7-3E55-49C8-92A9-6F3947731D1C}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={localappdata}\Programs\FilesExtract
+DefaultDirName={localappdata}\FilesExtract
 DefaultGroupName=FilesExtract
 PrivilegesRequired=lowest
 OutputDir={#OutputDir}
-OutputBaseFilename=FilesExtract-Full-Setup-v0.4.0
+OutputBaseFilename=FilesExtract-Full-Setup-v0.5.0
 Compression=lzma2/ultra64
 SolidCompression=yes
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+SetupArchitecture=x64
 WizardStyle=modern
 UninstallDisplayIcon={app}\{#MyAppExeName}
 DisableProgramGroupPage=yes
+CloseApplications=yes
+RestartApplications=no
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
