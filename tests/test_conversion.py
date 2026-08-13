@@ -1,4 +1,5 @@
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -18,6 +19,29 @@ def test_image_to_pdf(tmp_path: Path, sample_image: Path):
     result = convert_document(sample_image, out, target="pdf")
     assert result.pages == 1
     assert out.read_bytes().startswith(b"%PDF")
+
+
+def test_image_to_exact_word_has_full_page_artwork(tmp_path: Path, sample_image: Path):
+    out = tmp_path / "image.docx"
+    result = convert_document(sample_image, out, target="docx")
+    assert result.pages == 1
+    with ZipFile(out) as package:
+        assert package.getinfo("word/media/page_1.png").file_size > 0
+        xml = package.read("word/document.xml").decode("utf-8")
+        assert 'relativeFrom="page"' in xml
+        assert 'w:top="0"' in xml
+
+
+def test_two_page_pdf_to_exact_word_keeps_two_pages(tmp_path: Path, pdf_file: Path):
+    out = tmp_path / "pdf.docx"
+    result = convert_document(pdf_file, out, target="docx", options=ConversionOptions(render_dpi=144))
+    assert result.pages == 2
+    with ZipFile(out) as package:
+        assert package.getinfo("word/media/page_1.png").file_size > 0
+        assert package.getinfo("word/media/page_2.png").file_size > 0
+        xml = package.read("word/document.xml").decode("utf-8")
+        assert 'w:type w:val="nextPage"' in xml
+        assert 'rIdImage1' in xml and 'rIdImage2' in xml
 
 
 def test_invalid_conversion_requests(tmp_path: Path, sample_image: Path):
