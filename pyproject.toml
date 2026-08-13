@@ -32,6 +32,7 @@ dev = [
 
 [project.scripts]
 files-extract = "files_extract.cli:main"
+files-convert = "files_extract.conversion:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/files_extract"]
