@@ -1,0 +1,107 @@
+name: Android Full Product
+
+on:
+  push:
+    branches: ["release/android-v0.5"]
+  workflow_dispatch:
+
+concurrency:
+  group: android-full-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Install Android SDK 35
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Unit tests
+        run: gradle -p android testDebugUnitTest --stacktrace
+
+      - name: Android lint
+        run: gradle -p android lintDebug --stacktrace
+
+      - name: Build installable release APK
+        run: gradle -p android assembleRelease --stacktrace
+
+      - name: Package APK and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/android
+          cp android/app/build/outputs/apk/release/app-release.apk dist/android/FilesExtract-Mobile-v0.5.0-android.apk
+          (cd dist/android && sha256sum FilesExtract-Mobile-v0.5.0-android.apk > SHA256SUMS-ANDROID.txt)
+          cat > dist/android/build-info-android.json <<JSON
+          {
+            "product": "FilesExtract Mobile",
+            "version": "0.5.0",
+            "platform": "Android",
+            "abi": "universal",
+            "minSdk": 26,
+            "targetSdk": 35,
+            "commit": "${GITHUB_SHA}",
+            "signing": "debug-key-for-sideload-validation"
+          }
+          JSON
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FilesExtract-Mobile-v0.5.0-android
+          path: dist/android/*
+          if-no-files-found: error
+          retention-days: 30
+
+  emulator-gate:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Install Android SDK 35
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Build debug APK and test APK
+        run: gradle -p android assembleDebug assembleDebugAndroidTest --stacktrace
+
+      - name: Full extraction smoke test on Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+            adb shell am start -W -n com.filesextract.mobile/.MainActivity
+            adb shell pidof com.filesextract.mobile
+            gradle -p android connectedDebugAndroidTest --stacktrace
