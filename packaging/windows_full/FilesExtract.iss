@@ -1,6 +1,9 @@
 #ifndef SourceDir
   #define SourceDir "."
 #endif
+#ifndef OutputDir
+  #define OutputDir "dist"
+#endif
 
 #define MyAppName "FilesExtract"
 #define MyAppVersion "0.4.0"
@@ -15,7 +18,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\FilesExtract
 DefaultGroupName=FilesExtract
 PrivilegesRequired=lowest
-OutputDir=dist
+OutputDir={#OutputDir}
 OutputBaseFilename=FilesExtract-Full-Setup-v0.4.0
 Compression=lzma2/ultra64
 SolidCompression=yes
