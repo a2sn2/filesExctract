@@ -15,20 +15,44 @@ New-Item -ItemType Directory -Force -Path "dist" | Out-Null
 $zip = Join-Path $repo "dist/FilesExtract-Full-Portable-v0.4.0-windows-x64.zip"
 $setup = Join-Path $repo "dist/FilesExtract-Full-Setup-v0.4.0.exe"
 
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $resolved = [System.IO.Path]::GetFullPath($Path)
+    $stream = $null
+    $sha256 = $null
+    try {
+        $stream = [System.IO.File]::Open(
+            $resolved,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::Read
+        )
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $bytes = $sha256.ComputeHash($stream)
+        return [System.Convert]::ToHexString($bytes).ToLowerInvariant()
+    }
+    finally {
+        if ($sha256) { $sha256.Dispose() }
+        if ($stream) { $stream.Dispose() }
+    }
+}
+
 function Invoke-Manifest {
     Write-Host "== Integrity manifest =="
     $manifestPath = Join-Path $app "MANIFEST-SHA256.txt"
     if (Test-Path $manifestPath) { Remove-Item $manifestPath -Force }
     $lines = Get-ChildItem $app -File -Recurse | Sort-Object FullName | ForEach-Object {
-        $relative = [System.IO.Path]::GetRelativePath($app, $_.FullName).Replace('\','/')
-        $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $filePath = $_.FullName
+        $relative = [System.IO.Path]::GetRelativePath($app, $filePath).Replace('\','/')
+        $hash = Get-Sha256Hex -Path $filePath
         "$hash  $relative"
     }
     $lines | Set-Content $manifestPath -Encoding ASCII
     if (-not (Test-Path $manifestPath) -or (Get-Item $manifestPath).Length -le 0) {
         throw "Integrity manifest creation failed."
     }
-    Write-Host "Integrity manifest created."
+    Write-Host "Integrity manifest created with $($lines.Count) entries."
 }
 
 function Invoke-Portable {
@@ -65,7 +89,7 @@ function Get-InnoCompiler {
     $innoInstaller = Join-Path $env:RUNNER_TEMP "innosetup-$innoVersion.exe"
     $innoRoot = Join-Path $env:RUNNER_TEMP "FilesExtract-InnoSetup"
     Invoke-WebRequest $innoUrl -OutFile $innoInstaller
-    $innoActualSha256 = (Get-FileHash $innoInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+    $innoActualSha256 = Get-Sha256Hex -Path $innoInstaller
     if ($innoActualSha256 -ne $innoExpectedSha256) {
         throw "Inno Setup checksum mismatch. Expected $innoExpectedSha256, got $innoActualSha256."
     }
@@ -102,7 +126,7 @@ function Invoke-Finalize {
     if (-not (Test-Path $zip)) { throw "Portable ZIP is missing: $zip" }
     $hashLines = @()
     foreach ($file in @($setup, $zip)) {
-        $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+        $hash = Get-Sha256Hex -Path $file
         $hashLines += "$hash  $([System.IO.Path]::GetFileName($file))"
     }
     $hashLines | Set-Content (Join-Path $repo "dist/SHA256SUMS-WINDOWS-FULL.txt") -Encoding ASCII
