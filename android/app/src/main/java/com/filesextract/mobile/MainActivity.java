@@ -29,13 +29,17 @@ public final class MainActivity extends Activity {
     private static final int PICK_FILE = 1001;
     private Uri selectedUri;
     private String selectedName;
+    private String selectedMime;
     private TextView fileLabel;
     private TextView status;
     private Button extractButton;
+    private Button convertWordButton;
     private Button shareButton;
+    private Button shareConvertedButton;
     private ProgressBar progress;
     private CheckBox ocr;
     private Models.ExtractionOutput lastOutput;
+    private File lastConvertedFile;
 
     @Override protected void onCreate(Bundle savedInstanceState) { super.onCreate(savedInstanceState); setContentView(buildUi()); }
 
@@ -46,16 +50,83 @@ public final class MainActivity extends Activity {
         root.setPadding(dp(20), dp(24), dp(20), dp(24));
         root.setGravity(Gravity.CENTER_HORIZONTAL);
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
-        TextView title = text("FilesExtract", 30, true); title.setTextColor(Color.rgb(17, 24, 39)); root.addView(title, lp(-1, -2, 0));
-        TextView subtitle = text("Extract PDF, Word, Excel and PowerPoint into structured JSON + Markdown — locally on Android.", 16, false); subtitle.setTextColor(Color.DKGRAY); subtitle.setPadding(0, dp(8), 0, dp(24)); root.addView(subtitle, lp(-1, -2, 0));
-        Button pick = new Button(this); pick.setText("Choose document"); pick.setOnClickListener(v -> chooseFile()); root.addView(pick, lp(-1, dp(52), 0));
-        fileLabel = text("No file selected", 14, false); fileLabel.setPadding(0, dp(10), 0, dp(14)); root.addView(fileLabel, lp(-1, -2, 0));
-        ocr = new CheckBox(this); ocr.setText("OCR scanned PDF pages (on-device)"); ocr.setChecked(true); root.addView(ocr, lp(-1, -2, 0));
-        extractButton = new Button(this); extractButton.setText("Extract"); extractButton.setEnabled(false); extractButton.setOnClickListener(v -> startExtraction()); root.addView(extractButton, lp(-1, dp(52), dp(12)));
-        progress = new ProgressBar(this); progress.setIndeterminate(true); progress.setVisibility(View.GONE); LinearLayout.LayoutParams pp = lp(-2, -2, dp(18)); pp.gravity = Gravity.CENTER_HORIZONTAL; root.addView(progress, pp);
-        status = text("Ready", 14, false); status.setTextIsSelectable(true); status.setPadding(0, dp(16), 0, dp(16)); root.addView(status, lp(-1, -2, 0));
-        shareButton = new Button(this); shareButton.setText("Share JSON + Markdown"); shareButton.setEnabled(false); shareButton.setOnClickListener(v -> shareOutput()); root.addView(shareButton, lp(-1, dp(52), 0));
-        TextView note = text("Security: files are processed locally. Macros/OLE objects are never executed. Output is stored under the app's Documents/FilesExtract directory.", 12, false); note.setTextColor(Color.GRAY); note.setPadding(0, dp(22), 0, 0); root.addView(note, lp(-1, -2, 0));
+
+        TextView title = text("FilesExtract", 30, true);
+        title.setTextColor(Color.rgb(17, 24, 39));
+        root.addView(title, lp(-1, -2, 0));
+
+        TextView subtitle = text("Extract structured data or convert PDF/images to Word while preserving the source page appearance — locally on Android.", 16, false);
+        subtitle.setTextColor(Color.DKGRAY);
+        subtitle.setPadding(0, dp(8), 0, dp(24));
+        root.addView(subtitle, lp(-1, -2, 0));
+
+        Button pick = new Button(this);
+        pick.setText("Choose document");
+        pick.setOnClickListener(v -> chooseFile());
+        root.addView(pick, lp(-1, dp(52), 0));
+
+        fileLabel = text("No file selected", 14, false);
+        fileLabel.setPadding(0, dp(10), 0, dp(14));
+        root.addView(fileLabel, lp(-1, -2, 0));
+
+        TextView extractionTitle = text("Structured extraction", 18, true);
+        extractionTitle.setPadding(0, dp(8), 0, dp(4));
+        root.addView(extractionTitle, lp(-1, -2, 0));
+
+        ocr = new CheckBox(this);
+        ocr.setText("OCR scanned PDF pages (on-device)");
+        ocr.setChecked(true);
+        root.addView(ocr, lp(-1, -2, 0));
+
+        extractButton = new Button(this);
+        extractButton.setText("Extract JSON + Markdown");
+        extractButton.setEnabled(false);
+        extractButton.setOnClickListener(v -> startExtraction());
+        root.addView(extractButton, lp(-1, dp(52), dp(8)));
+
+        shareButton = new Button(this);
+        shareButton.setText("Share JSON + Markdown");
+        shareButton.setEnabled(false);
+        shareButton.setOnClickListener(v -> shareOutput());
+        root.addView(shareButton, lp(-1, dp(52), dp(8)));
+
+        TextView conversionTitle = text("Layout-preserving conversion", 18, true);
+        conversionTitle.setPadding(0, dp(24), 0, dp(4));
+        root.addView(conversionTitle, lp(-1, -2, 0));
+
+        TextView conversionHint = text("PDF / image → Word (Exact Layout): keeps every page visually unchanged by placing a full-page render at the original page size. This mode prioritizes appearance; page text is not individually editable yet.", 13, false);
+        conversionHint.setTextColor(Color.DKGRAY);
+        conversionHint.setPadding(0, 0, 0, dp(8));
+        root.addView(conversionHint, lp(-1, -2, 0));
+
+        convertWordButton = new Button(this);
+        convertWordButton.setText("Convert to Word — Exact Layout");
+        convertWordButton.setEnabled(false);
+        convertWordButton.setOnClickListener(v -> startVisualWordConversion());
+        root.addView(convertWordButton, lp(-1, dp(52), dp(8)));
+
+        shareConvertedButton = new Button(this);
+        shareConvertedButton.setText("Share converted Word file");
+        shareConvertedButton.setEnabled(false);
+        shareConvertedButton.setOnClickListener(v -> shareConvertedWord());
+        root.addView(shareConvertedButton, lp(-1, dp(52), dp(8)));
+
+        progress = new ProgressBar(this);
+        progress.setIndeterminate(true);
+        progress.setVisibility(View.GONE);
+        LinearLayout.LayoutParams pp = lp(-2, -2, dp(18));
+        pp.gravity = Gravity.CENTER_HORIZONTAL;
+        root.addView(progress, pp);
+
+        status = text("Ready", 14, false);
+        status.setTextIsSelectable(true);
+        status.setPadding(0, dp(16), 0, dp(16));
+        root.addView(status, lp(-1, -2, 0));
+
+        TextView note = text("Security: files are processed locally. Macros/OLE objects are never executed. Extraction output is stored under Documents/FilesExtract; converted Word files are stored under Documents/FilesExtract/Conversions.", 12, false);
+        note.setTextColor(Color.GRAY);
+        note.setPadding(0, dp(22), 0, 0);
+        root.addView(note, lp(-1, -2, 0));
         return scroll;
     }
 
@@ -63,62 +134,194 @@ public final class MainActivity extends Activity {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
-        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","application/vnd.ms-excel.sheet.macroEnabled.12","application/vnd.openxmlformats-officedocument.presentationml.presentation"});
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.ms-excel.sheet.macroEnabled.12",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "image/png",
+                "image/jpeg",
+                "image/webp",
+                "image/heic",
+                "image/heif"
+        });
         startActivityForResult(intent, PICK_FILE);
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == PICK_FILE && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            selectedUri = data.getData(); selectedName = displayName(selectedUri); if (selectedName == null || selectedName.trim().isEmpty()) selectedName = "document";
-            fileLabel.setText(selectedName); extractButton.setEnabled(true); shareButton.setEnabled(false); lastOutput = null; status.setText("Selected. Tap Extract.");
+            selectedUri = data.getData();
+            selectedName = displayName(selectedUri);
+            selectedMime = getContentResolver().getType(selectedUri);
+            if (selectedName == null || selectedName.trim().isEmpty()) selectedName = "document";
+            fileLabel.setText(selectedName + (selectedMime == null ? "" : "\n" + selectedMime));
+            extractButton.setEnabled(isExtractable(selectedName));
+            convertWordButton.setEnabled(VisualDocxConverter.supports(selectedName, selectedMime));
+            shareButton.setEnabled(false);
+            shareConvertedButton.setEnabled(false);
+            lastOutput = null;
+            lastConvertedFile = null;
+            status.setText("Selected. Choose extraction or layout-preserving conversion.");
             try { getContentResolver().takePersistableUriPermission(selectedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION); } catch (Exception ignored) {}
         }
     }
 
+    private boolean isExtractable(String name) {
+        if (name == null) return false;
+        String lower = name.toLowerCase(java.util.Locale.ROOT);
+        return lower.endsWith(".pdf") || lower.endsWith(".docx") || lower.endsWith(".xlsx")
+                || lower.endsWith(".xlsm") || lower.endsWith(".pptx");
+    }
+
     private void startExtraction() {
         if (selectedUri == null) return;
-        extractButton.setEnabled(false); shareButton.setEnabled(false); progress.setVisibility(View.VISIBLE); status.setText("Extracting… Large files and OCR may take a while.");
-        Uri uri = selectedUri; String name = selectedName; boolean enableOcr = ocr.isChecked();
+        setBusy(true);
+        shareButton.setEnabled(false);
+        status.setText("Extracting… Large files and OCR may take a while.");
+        Uri uri = selectedUri;
+        String name = selectedName;
+        boolean enableOcr = ocr.isChecked();
         new Thread(() -> {
             File temp = null;
             try {
                 temp = copyToCache(uri, name);
-                Models.ExtractionOptions options = new Models.ExtractionOptions(); options.enableOcr = enableOcr;
-                Models.ExtractionOutput output = MobileEngine.extract(getApplicationContext(), temp, name, options); lastOutput = output;
-                String message = "Success\n\nType: " + output.result.documentType + "\nUnits: " + output.result.unitCount + "\nAssets: " + output.result.assets.size() + "\nWarnings: " + output.result.warnings.size() + "\nUnsupported: " + output.result.unsupportedObjects.size() + "\n\nOutput:\n" + output.directory.getAbsolutePath();
-                runOnUiThread(() -> { progress.setVisibility(View.GONE); extractButton.setEnabled(true); shareButton.setEnabled(true); status.setText(message); });
+                Models.ExtractionOptions options = new Models.ExtractionOptions();
+                options.enableOcr = enableOcr;
+                Models.ExtractionOutput output = MobileEngine.extract(getApplicationContext(), temp, name, options);
+                lastOutput = output;
+                String message = "Extraction success\n\nType: " + output.result.documentType
+                        + "\nUnits: " + output.result.unitCount
+                        + "\nAssets: " + output.result.assets.size()
+                        + "\nWarnings: " + output.result.warnings.size()
+                        + "\nUnsupported: " + output.result.unsupportedObjects.size()
+                        + "\n\nOutput:\n" + output.directory.getAbsolutePath();
+                runOnUiThread(() -> {
+                    setBusy(false);
+                    shareButton.setEnabled(true);
+                    status.setText(message);
+                });
             } catch (Exception ex) {
                 String message = ex.getClass().getSimpleName() + ": " + (ex.getMessage() == null ? "Extraction failed" : ex.getMessage());
-                runOnUiThread(() -> { progress.setVisibility(View.GONE); extractButton.setEnabled(true); status.setText("Failed\n\n" + message); Toast.makeText(MainActivity.this, "Extraction failed", Toast.LENGTH_LONG).show(); });
-            } finally { if (temp != null) temp.delete(); }
+                runOnUiThread(() -> {
+                    setBusy(false);
+                    status.setText("Failed\n\n" + message);
+                    Toast.makeText(MainActivity.this, "Extraction failed", Toast.LENGTH_LONG).show();
+                });
+            } finally {
+                if (temp != null) temp.delete();
+            }
         }, "files-extract-worker").start();
     }
 
+    private void startVisualWordConversion() {
+        if (selectedUri == null) return;
+        setBusy(true);
+        shareConvertedButton.setEnabled(false);
+        status.setText("Converting to Word… Rendering each source page without layout reflow.");
+        Uri uri = selectedUri;
+        String name = selectedName;
+        String mime = selectedMime;
+        new Thread(() -> {
+            File temp = null;
+            try {
+                temp = copyToCache(uri, name);
+                VisualDocxConverter.ConversionOutput output = VisualDocxConverter.convert(getApplicationContext(), temp, name, mime);
+                lastConvertedFile = output.file;
+                String message = "Word conversion success\n\nMode: Exact visual layout"
+                        + "\nPages: " + output.pages
+                        + "\n\nImportant: visual appearance is preserved by embedding each source page as a full-page render."
+                        + "\nText is not individually editable in this exact-layout mode."
+                        + "\n\nOutput:\n" + output.file.getAbsolutePath();
+                runOnUiThread(() -> {
+                    setBusy(false);
+                    shareConvertedButton.setEnabled(true);
+                    status.setText(message);
+                });
+            } catch (Exception ex) {
+                String message = ex.getClass().getSimpleName() + ": " + (ex.getMessage() == null ? "Conversion failed" : ex.getMessage());
+                runOnUiThread(() -> {
+                    setBusy(false);
+                    status.setText("Failed\n\n" + message);
+                    Toast.makeText(MainActivity.this, "Word conversion failed", Toast.LENGTH_LONG).show();
+                });
+            } finally {
+                if (temp != null) temp.delete();
+            }
+        }, "files-convert-worker").start();
+    }
+
+    private void setBusy(boolean busy) {
+        progress.setVisibility(busy ? View.VISIBLE : View.GONE);
+        extractButton.setEnabled(!busy && selectedUri != null && isExtractable(selectedName));
+        convertWordButton.setEnabled(!busy && selectedUri != null && VisualDocxConverter.supports(selectedName, selectedMime));
+    }
+
     private File copyToCache(Uri uri, String name) throws Exception {
-        String suffix = ".bin"; int dot = name.lastIndexOf('.'); if (dot >= 0 && dot < name.length() - 1) suffix = name.substring(dot);
-        File temp = File.createTempFile("filesextract-", suffix, getCacheDir()); ContentResolver resolver = getContentResolver();
+        String suffix = ".bin";
+        int dot = name.lastIndexOf('.');
+        if (dot >= 0 && dot < name.length() - 1) suffix = name.substring(dot);
+        File temp = File.createTempFile("filesextract-", suffix, getCacheDir());
+        ContentResolver resolver = getContentResolver();
         try (InputStream in = resolver.openInputStream(uri); FileOutputStream out = new FileOutputStream(temp)) {
             if (in == null) throw new IllegalArgumentException("Could not open selected document.");
-            byte[] buffer = new byte[64 * 1024]; long total = 0; int n;
-            while ((n = in.read(buffer)) != -1) { total += n; if (total > 250L * 1024L * 1024L) throw new IllegalArgumentException("File exceeds the 250 MB mobile limit."); out.write(buffer, 0, n); }
+            byte[] buffer = new byte[64 * 1024];
+            long total = 0;
+            int n;
+            while ((n = in.read(buffer)) != -1) {
+                total += n;
+                if (total > 250L * 1024L * 1024L) throw new IllegalArgumentException("File exceeds the 250 MB mobile limit.");
+                out.write(buffer, 0, n);
+            }
         }
         return temp;
     }
 
     private void shareOutput() {
         if (lastOutput == null) return;
-        ArrayList<Uri> uris = new ArrayList<>(); String authority = getPackageName() + ".files";
-        uris.add(FileProvider.getUriForFile(this, authority, lastOutput.jsonFile)); uris.add(FileProvider.getUriForFile(this, authority, lastOutput.markdownFile));
-        Intent share = new Intent(Intent.ACTION_SEND_MULTIPLE); share.setType("text/*"); share.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris); share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); startActivity(Intent.createChooser(share, "Share FilesExtract output"));
+        ArrayList<Uri> uris = new ArrayList<>();
+        String authority = getPackageName() + ".files";
+        uris.add(FileProvider.getUriForFile(this, authority, lastOutput.jsonFile));
+        uris.add(FileProvider.getUriForFile(this, authority, lastOutput.markdownFile));
+        Intent share = new Intent(Intent.ACTION_SEND_MULTIPLE);
+        share.setType("text/*");
+        share.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+        share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(Intent.createChooser(share, "Share FilesExtract output"));
+    }
+
+    private void shareConvertedWord() {
+        if (lastConvertedFile == null || !lastConvertedFile.isFile()) return;
+        Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".files", lastConvertedFile);
+        Intent share = new Intent(Intent.ACTION_SEND);
+        share.setType("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        share.putExtra(Intent.EXTRA_STREAM, uri);
+        share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(Intent.createChooser(share, "Share converted Word file"));
     }
 
     private String displayName(Uri uri) {
-        try (Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) { if (cursor != null && cursor.moveToFirst()) return cursor.getString(0); } catch (Exception ignored) {}
-        String path = uri.getLastPathSegment(); return path == null ? "document" : path;
+        try (Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) return cursor.getString(0);
+        } catch (Exception ignored) {}
+        String path = uri.getLastPathSegment();
+        return path == null ? "document" : path;
     }
 
-    private TextView text(String value, int sp, boolean bold) { TextView tv = new TextView(this); tv.setText(value); tv.setTextSize(sp); if (bold) tv.setTypeface(tv.getTypeface(), android.graphics.Typeface.BOLD); return tv; }
-    private LinearLayout.LayoutParams lp(int w, int h, int top) { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(w, h); p.topMargin = top; return p; }
+    private TextView text(String value, int sp, boolean bold) {
+        TextView tv = new TextView(this);
+        tv.setText(value);
+        tv.setTextSize(sp);
+        if (bold) tv.setTypeface(tv.getTypeface(), android.graphics.Typeface.BOLD);
+        return tv;
+    }
+
+    private LinearLayout.LayoutParams lp(int w, int h, int top) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(w, h);
+        p.topMargin = top;
+        return p;
+    }
+
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 }
