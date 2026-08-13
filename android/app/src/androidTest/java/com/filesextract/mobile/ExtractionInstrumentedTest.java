@@ -23,12 +23,51 @@ import static org.junit.Assert.*;
 public class ExtractionInstrumentedTest {
     private final Context context = ApplicationProvider.getApplicationContext();
 
-    @Test public void extractsAllSupportedFamilies() throws Exception {
-        Models.ExtractionOptions options = new Models.ExtractionOptions(); options.enableOcr = true;
-        File xlsx = sampleXlsx(); Models.ExtractionOutput xo = MobileEngine.extract(context, xlsx, "sample.xlsx", options); assertEquals("xlsx", xo.result.documentType); assertEquals(1, xo.result.unitCount); assertTrue(xo.jsonFile.length() > 0); assertTrue(xo.markdownFile.length() > 0); assertEquals("Hello", xo.result.units.get(0).elements.get(0).text);
-        File docx = sampleDocx(); Models.ExtractionOutput wo = MobileEngine.extract(context, docx, "sample.docx", options); assertEquals("docx", wo.result.documentType); assertTrue(wo.result.units.get(0).elements.stream().anyMatch(e -> e.text != null && e.text.contains("Hello Word")));
-        File pptx = samplePptx(); Models.ExtractionOutput po = MobileEngine.extract(context, pptx, "sample.pptx", options); assertEquals("pptx", po.result.documentType); assertEquals(1, po.result.unitCount); assertTrue(po.result.units.get(0).elements.stream().anyMatch(e -> e.text != null && e.text.contains("Hello Slide")));
-        File pdf = samplePdf(); Models.ExtractionOutput pdo = MobileEngine.extract(context, pdf, "sample.pdf", options); assertEquals("pdf", pdo.result.documentType); assertEquals(1, pdo.result.unitCount); assertFalse(pdo.result.units.get(0).elements.isEmpty());
+    @Test public void extractsXlsx() throws Exception {
+        Models.ExtractionOutput output = MobileEngine.extract(context, sampleXlsx(), "sample.xlsx", options(false));
+        assertEquals("xlsx", output.result.documentType);
+        assertEquals(1, output.result.unitCount);
+        assertTrue(output.jsonFile.length() > 0);
+        assertTrue(output.markdownFile.length() > 0);
+        assertFalse(output.result.units.get(0).elements.isEmpty());
+        assertEquals("Hello", output.result.units.get(0).elements.get(0).text);
+    }
+
+    @Test public void extractsDocx() throws Exception {
+        Models.ExtractionOutput output = MobileEngine.extract(context, sampleDocx(), "sample.docx", options(false));
+        assertEquals("docx", output.result.documentType);
+        assertEquals(1, output.result.unitCount);
+        assertTrue(containsText(output, "Hello Word"));
+        assertTrue(output.result.metadata.containsKey("stored_page_count"));
+    }
+
+    @Test public void extractsPptx() throws Exception {
+        Models.ExtractionOutput output = MobileEngine.extract(context, samplePptx(), "sample.pptx", options(false));
+        assertEquals("pptx", output.result.documentType);
+        assertEquals(1, output.result.unitCount);
+        assertTrue(containsText(output, "Hello Slide"));
+    }
+
+    @Test public void extractsPdf() throws Exception {
+        Models.ExtractionOutput output = MobileEngine.extract(context, samplePdf(), "sample.pdf", options(false));
+        assertEquals("pdf", output.result.documentType);
+        assertEquals(1, output.result.unitCount);
+        assertFalse(output.result.units.get(0).elements.isEmpty());
+    }
+
+    private Models.ExtractionOptions options(boolean ocr) {
+        Models.ExtractionOptions options = new Models.ExtractionOptions();
+        options.enableOcr = ocr;
+        return options;
+    }
+
+    private boolean containsText(Models.ExtractionOutput output, String expected) {
+        for (Models.Unit unit : output.result.units) {
+            for (Models.Element element : unit.elements) {
+                if (element.text != null && element.text.contains(expected)) return true;
+            }
+        }
+        return false;
     }
 
     private File sampleXlsx() throws Exception {
@@ -68,8 +107,21 @@ public class ExtractionInstrumentedTest {
 
     private File samplePdf() throws Exception {
         File f = File.createTempFile("sample", ".pdf", context.getCacheDir());
-        PdfDocument doc = new PdfDocument(); PdfDocument.Page page = doc.startPage(new PdfDocument.PageInfo.Builder(600, 800, 1).create()); Canvas canvas = page.getCanvas(); Paint paint = new Paint(); paint.setTextSize(32f); canvas.drawText("Hello PDF", 50, 100, paint); doc.finishPage(page); try (FileOutputStream out = new FileOutputStream(f)) { doc.writeTo(out); } doc.close(); return f;
+        PdfDocument doc = new PdfDocument();
+        PdfDocument.Page page = doc.startPage(new PdfDocument.PageInfo.Builder(600, 800, 1).create());
+        Canvas canvas = page.getCanvas();
+        Paint paint = new Paint();
+        paint.setTextSize(32f);
+        canvas.drawText("Hello PDF", 50, 100, paint);
+        doc.finishPage(page);
+        try (FileOutputStream out = new FileOutputStream(f)) { doc.writeTo(out); }
+        doc.close();
+        return f;
     }
 
-    private void put(ZipOutputStream z, String path, String text) throws Exception { z.putNextEntry(new ZipEntry(path)); z.write(text.getBytes(StandardCharsets.UTF_8)); z.closeEntry(); }
+    private void put(ZipOutputStream z, String path, String text) throws Exception {
+        z.putNextEntry(new ZipEntry(path));
+        z.write(text.getBytes(StandardCharsets.UTF_8));
+        z.closeEntry();
+    }
 }
