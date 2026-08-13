@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 from .assets import materialize_assets
@@ -17,6 +18,56 @@ def _file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _is_existing_files_extract_package(output_dir: Path) -> bool:
+    """Return True only when the directory contains our previous manifest.
+
+    This prevents FilesExtract from deleting arbitrary user content merely
+    because a caller chose a non-empty output directory. Cleanup is limited to
+    directories that can be positively identified as a prior FilesExtract
+    package.
+    """
+
+    manifest_path = output_dir / "manifest.json"
+    if not manifest_path.is_file():
+        return False
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return bool(
+        isinstance(payload, dict)
+        and payload.get("schema_version")
+        and isinstance(payload.get("source"), dict)
+        and payload["source"].get("filename")
+        and isinstance(payload.get("summary"), dict)
+        and isinstance(payload.get("files"), list)
+    )
+
+
+def _remove_generated_path(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
+    is_junction = getattr(path, "is_junction", None)
+    if path.is_symlink() or (callable(is_junction) and is_junction()):
+        path.unlink(missing_ok=True)
+    elif path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _prepare_output_dir(output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if not _is_existing_files_extract_package(output_dir):
+        return
+
+    # These names are reserved by the FilesExtract package contract. Removing
+    # them before a repeated extraction prevents stale Markdown or stale assets
+    # from a previous run from masquerading as part of the new package.
+    for name in ("document.json", "document.md", "manifest.json", "assets"):
+        _remove_generated_path(output_dir / name)
+
+
 def write_output_package(
     source: Path,
     document: CanonicalDocument,
@@ -27,7 +78,7 @@ def write_output_package(
     extract_assets: bool = True,
     pdf_password: str | None = None,
 ) -> dict[str, object]:
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _prepare_output_dir(output_dir)
     written: list[Path] = []
     if output_format in {"both", "json"}:
         p = output_dir / "document.json"
