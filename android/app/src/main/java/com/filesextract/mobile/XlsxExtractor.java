@@ -29,7 +29,7 @@ final class XlsxExtractor implements MobileExtractor {
                 sheetIndex++;
                 String name = XmlUtil.attr(sheet, "name");
                 String state = XmlUtil.attr(sheet, "state");
-                String rid = XmlUtil.attr(sheet, "id");
+                String rid = XmlUtil.relationshipId(sheet);
                 OoxmlRelations.Rel rel = workbookRels.get(rid);
                 if (rel == null) {
                     out.warnings.add("Sheet relationship missing for: " + name);
@@ -123,7 +123,7 @@ final class XlsxExtractor implements MobileExtractor {
             Models.Element e = new Models.Element(++order, "hyperlink", XmlUtil.attr(link, "ref"));
             e.data.put("cell_range", XmlUtil.attr(link, "ref"));
             String location = XmlUtil.attr(link, "location");
-            String rid = XmlUtil.attr(link, "id");
+            String rid = XmlUtil.relationshipId(link);
             if (!location.isEmpty()) e.data.put("location", location);
             if (!rid.isEmpty() && sheetRels.containsKey(rid)) e.data.put("target", sheetRels.get(rid).target);
             unit.elements.add(e);

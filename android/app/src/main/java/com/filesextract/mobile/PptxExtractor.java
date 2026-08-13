@@ -27,10 +27,10 @@ final class PptxExtractor implements MobileExtractor {
             int index = 0;
             for (Element sldId : XmlUtil.descendants(pres.getDocumentElement(), "sldId")) {
                 index++;
-                String rid = XmlUtil.attr(sldId, "id");
+                String rid = XmlUtil.relationshipId(sldId);
                 OoxmlRelations.Rel rel = presRels.get(rid);
                 if (rel == null) {
-                    out.warnings.add("Slide relationship missing at index " + index);
+                    out.warnings.add("Slide relationship missing at index " + index + " (r:id=" + rid + ")");
                     continue;
                 }
                 String slidePath = SafeZip.resolve("ppt/presentation.xml", rel.target);
@@ -156,7 +156,7 @@ final class PptxExtractor implements MobileExtractor {
         }
         String chartRid = "";
         Element chart = firstDesc(frame, "chart");
-        if (chart != null) chartRid = XmlUtil.attr(chart, "id");
+        if (chart != null) chartRid = XmlUtil.relationshipId(chart);
         Models.Element e = new Models.Element(order, chart == null ? "graphic" : "chart_reference", XmlUtil.descendantText(frame, "t"));
         if (!chartRid.isEmpty() && rels.containsKey(chartRid)) e.data.put("target", rels.get(chartRid).target);
         return e;
@@ -173,7 +173,7 @@ final class PptxExtractor implements MobileExtractor {
         }
         Element blip = firstDesc(pic, "blip");
         if (blip != null) {
-            String rid = XmlUtil.attr(blip, "embed");
+            String rid = XmlUtil.relationshipEmbed(blip);
             if (!rid.isEmpty() && rels.containsKey(rid)) e.data.put("target", rels.get(rid).target);
         }
         return e;

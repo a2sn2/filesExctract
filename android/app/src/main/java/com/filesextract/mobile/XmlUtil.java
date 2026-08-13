@@ -11,6 +11,8 @@ import java.util.List;
 import javax.xml.parsers.DocumentBuilderFactory;
 
 final class XmlUtil {
+    static final String OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
     private XmlUtil() {}
 
     static Document parse(byte[] xml) throws Exception {
@@ -43,6 +45,23 @@ final class XmlUtil {
             if (localName.equals(local(a))) return a.getNodeValue();
         }
         return "";
+    }
+
+    static String attrNs(Element e, String namespaceUri, String localName) {
+        if (e.hasAttributeNS(namespaceUri, localName)) return e.getAttributeNS(namespaceUri, localName);
+        for (int i = 0; i < e.getAttributes().getLength(); i++) {
+            Node a = e.getAttributes().item(i);
+            if (localName.equals(local(a)) && namespaceUri.equals(a.getNamespaceURI())) return a.getNodeValue();
+        }
+        return "";
+    }
+
+    static String relationshipId(Element e) {
+        return attrNs(e, OFFICE_REL_NS, "id");
+    }
+
+    static String relationshipEmbed(Element e) {
+        return attrNs(e, OFFICE_REL_NS, "embed");
     }
 
     static List<Element> children(Element parent, String localName) {

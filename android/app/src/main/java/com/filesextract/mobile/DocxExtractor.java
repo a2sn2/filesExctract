@@ -115,7 +115,7 @@ final class DocxExtractor implements MobileExtractor {
 
         List<Map<String, String>> links = new ArrayList<>();
         for (Element h : XmlUtil.descendants(p, "hyperlink")) {
-            String rid = XmlUtil.attr(h, "id");
+            String rid = XmlUtil.relationshipId(h);
             String anchor = XmlUtil.attr(h, "anchor");
             Map<String, String> link = new LinkedHashMap<>();
             link.put("text", XmlUtil.descendantText(h, "t"));
