@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace FilesExtract.Gui;
@@ -248,6 +249,20 @@ internal sealed class MainForm : Form
         _log.ScrollToCaret();
     }
 
+    private static string BaseDestinationName(string source)
+    {
+        var ext = Path.GetExtension(source).TrimStart('.').ToLowerInvariant();
+        var name = Path.GetFileNameWithoutExtension(source);
+        return $"{name}__{ext}_extracted";
+    }
+
+    private static string ShortPathHash(string source)
+    {
+        var normalized = Path.GetFullPath(source).ToUpperInvariant();
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
+        return Convert.ToHexString(bytes)[..8].ToLowerInvariant();
+    }
+
     private async Task DoctorAsync(bool showHeader = true)
     {
         SetBusy(true);
@@ -278,20 +293,29 @@ internal sealed class MainForm : Form
         if (string.IsNullOrWhiteSpace(_output.Text)) return;
 
         Directory.CreateDirectory(_output.Text);
+        var duplicateDestinationNames = sources
+            .GroupBy(BaseDestinationName, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         SetBusy(true);
         var failed = 0;
         try
         {
             foreach (var source in sources)
             {
-                var ext = Path.GetExtension(source).TrimStart('.').ToLowerInvariant();
-                var name = Path.GetFileNameWithoutExtension(source);
-                var destination = Path.Combine(_output.Text, $"{name}__{ext}_extracted");
+                var baseName = BaseDestinationName(source);
+                var destinationName = duplicateDestinationNames.Contains(baseName)
+                    ? $"{Path.GetFileNameWithoutExtension(source)}__{Path.GetExtension(source).TrimStart('.').ToLowerInvariant()}__{ShortPathHash(source)}_extracted"
+                    : baseName;
+                var destination = Path.Combine(_output.Text, destinationName);
                 var args = new List<string> { "extract", source, "-o", destination };
                 if (!_assets.Checked) args.Add("--no-assets");
                 if (!_pagination.Checked) args.Add("--no-render-word-pages");
 
                 Log($"> Extracting {source}");
+                Log($"  Output: {destination}");
                 var result = await Backend.RunAsync(args, _password.Text);
                 Log(result.Stdout);
                 Log(result.Stderr);
@@ -308,7 +332,11 @@ internal sealed class MainForm : Form
             Log(ex.ToString());
             MessageBox.Show(this, ex.Message, "FilesExtract", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
-        finally { SetBusy(false); }
+        finally
+        {
+            _password.Clear();
+            SetBusy(false);
+        }
     }
 
     private void OpenOutput()
