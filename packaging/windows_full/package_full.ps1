@@ -11,9 +11,10 @@ Set-Location $repo
 $app = [System.IO.Path]::GetFullPath((Join-Path $repo $AppRoot))
 if (-not (Test-Path (Join-Path $app "FilesExtract.exe"))) { throw "Windows full app was not built: $app" }
 
-New-Item -ItemType Directory -Force -Path "dist" | Out-Null
-$zip = Join-Path $repo "dist/FilesExtract-Full-Portable-v0.4.0-windows-x64.zip"
-$setup = Join-Path $repo "dist/FilesExtract-Full-Setup-v0.4.0.exe"
+$dist = [System.IO.Path]::GetFullPath((Join-Path $repo "dist"))
+New-Item -ItemType Directory -Force -Path $dist | Out-Null
+$zip = Join-Path $dist "FilesExtract-Full-Portable-v0.4.0-windows-x64.zip"
+$setup = Join-Path $dist "FilesExtract-Full-Setup-v0.4.0.exe"
 
 function Get-Sha256Hex {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -112,7 +113,8 @@ function Invoke-Installer {
     if (Test-Path $setup) { Remove-Item $setup -Force }
     $iscc = Get-InnoCompiler
     Write-Host "Using ISCC: $iscc"
-    & $iscc "/DSourceDir=$app" "packaging/windows_full/FilesExtract.iss"
+    Write-Host "Installer output directory: $dist"
+    & $iscc "/DSourceDir=$app" "/DOutputDir=$dist" "packaging/windows_full/FilesExtract.iss"
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed with exit code $LASTEXITCODE." }
     if (-not (Test-Path $setup) -or (Get-Item $setup).Length -le 0) {
         throw "Expected installer was not created: $setup"
@@ -129,8 +131,8 @@ function Invoke-Finalize {
         $hash = Get-Sha256Hex -Path $file
         $hashLines += "$hash  $([System.IO.Path]::GetFileName($file))"
     }
-    $hashLines | Set-Content (Join-Path $repo "dist/SHA256SUMS-WINDOWS-FULL.txt") -Encoding ASCII
-    Copy-Item (Join-Path $app "build-info.json") (Join-Path $repo "dist/build-info-windows-full.json") -Force
+    $hashLines | Set-Content (Join-Path $dist "SHA256SUMS-WINDOWS-FULL.txt") -Encoding ASCII
+    Copy-Item (Join-Path $app "build-info.json") (Join-Path $dist "build-info-windows-full.json") -Force
     Write-Host "Packaging complete."
 }
 
