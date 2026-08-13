@@ -9,6 +9,7 @@
 #define MyAppVersion "0.5.0"
 #define MyAppPublisher "ALHassan ALShami"
 #define MyAppExeName "FilesExtract.exe"
+#define MyConvertExeName "FilesConvert.exe"
 
 [Setup]
 AppId={{A16AF1D7-3E55-49C8-92A9-6F3947731D1C}
@@ -34,10 +35,13 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 
 [Icons]
 Name: "{autoprograms}\FilesExtract"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autoprograms}\FilesExtract Converter"; Filename: "{app}\{#MyConvertExeName}"
 Name: "{autodesktop}\FilesExtract"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\FilesExtract Converter"; Filename: "{app}\{#MyConvertExeName}"; Tasks: converterdesktopicon
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a FilesExtract desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+Name: "converterdesktopicon"; Description: "Create a FilesExtract Converter desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch FilesExtract"; Flags: nowait postinstall skipifsilent
