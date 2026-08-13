@@ -1,0 +1,69 @@
+name: Publish Windows v0.4.0 Release
+
+on:
+  push:
+    branches: ["release/publish-v0.4"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Download tested Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FilesExtract-Full-v0.4.0-windows-x64
+          path: release-assets
+          run-id: 31678948025
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+
+      - name: Verify expected release files and SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          test -s FilesExtract-Full-Setup-v0.4.0.exe
+          test -s FilesExtract-Full-Portable-v0.4.0-windows-x64.zip
+          test -s SHA256SUMS-WINDOWS-FULL.txt
+          test -s build-info-windows-full.json
+          sha256sum -c SHA256SUMS-WINDOWS-FULL.txt
+          echo "Release asset sizes:"
+          ls -lh FilesExtract-Full-Setup-v0.4.0.exe FilesExtract-Full-Portable-v0.4.0-windows-x64.zip SHA256SUMS-WINDOWS-FULL.txt build-info-windows-full.json
+
+      - name: Publish immutable GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<'EOF'
+          # FilesExtract v0.4.0 — Windows Full
+
+          Production Windows x64 release built and tested from commit `6cfaf96686914762fe368af444fd523a721aad80`.
+
+          The release gate passed end-to-end on GitHub Actions: full runtime build, portable smoke test, integrity manifest, portable ZIP, Windows installer, package checksums, silent installation, and smoke test of the installed product.
+
+          ## Recommended download
+          Use `FilesExtract-Full-Setup-v0.4.0.exe` for normal Windows installation.
+
+          `FilesExtract-Full-Portable-v0.4.0-windows-x64.zip` is provided for portable/offline use.
+
+          Verify downloads with `SHA256SUMS-WINDOWS-FULL.txt` before distribution when integrity assurance is required.
+          EOF
+
+          gh release create v0.4.0 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target 6cfaf96686914762fe368af444fd523a721aad80 \
+            --title "FilesExtract v0.4.0 — Windows Full" \
+            --notes-file release-notes.md \
+            release-assets/FilesExtract-Full-Setup-v0.4.0.exe \
+            release-assets/FilesExtract-Full-Portable-v0.4.0-windows-x64.zip \
+            release-assets/SHA256SUMS-WINDOWS-FULL.txt \
+            release-assets/build-info-windows-full.json
