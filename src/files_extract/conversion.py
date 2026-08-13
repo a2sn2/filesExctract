@@ -11,8 +11,8 @@ from pathlib import Path
 from PIL import Image
 
 from .errors import FilesExtractError, InvalidInputFileError
+from .exact_docx import image_to_exact_docx, pdf_to_exact_docx
 from .libreoffice import convert_office
-from .visual_docx import image_to_visual_docx, pdf_to_visual_docx
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 _OFFICE_SUFFIXES = {".doc", ".docx", ".docm", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx", ".pptm"}
@@ -56,15 +56,15 @@ def convert_document(source: str | Path, output: str | Path, *, target: str, opt
                 shutil.copy2(src, dst)
             return ConversionResult(src, dst, target, opts.mode)
         if suffix == ".pdf":
-            pages = pdf_to_visual_docx(src, dst, dpi=opts.render_dpi, password=opts.password)
+            pages = pdf_to_exact_docx(src, dst, dpi=opts.render_dpi, password=opts.password)
             return ConversionResult(src, dst, target, opts.mode, pages=pages)
         if suffix in _IMAGE_SUFFIXES:
-            pages = image_to_visual_docx(src, dst)
+            pages = image_to_exact_docx(src, dst)
             return ConversionResult(src, dst, target, opts.mode, pages=pages)
         if suffix in _OFFICE_SUFFIXES:
             with tempfile.TemporaryDirectory(prefix="files-extract-convert-") as temp:
                 pdf = convert_office(src, "pdf", Path(temp), timeout=opts.libreoffice_timeout_seconds)
-                pages = pdf_to_visual_docx(pdf, dst, dpi=opts.render_dpi)
+                pages = pdf_to_exact_docx(pdf, dst, dpi=opts.render_dpi)
             return ConversionResult(src, dst, target, opts.mode, pages=pages, warnings=["Office source was rendered through LibreOffice before Word packaging to prevent reflow."])
 
     if target == "pdf":
