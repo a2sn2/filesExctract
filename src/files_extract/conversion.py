@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import argparse
+import os
 import shutil
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,13 +42,11 @@ def convert_document(source: str | Path, output: str | Path, *, target: str, opt
     dst = Path(output).expanduser().resolve()
     if not src.is_file():
         raise InvalidInputFileError(f"Conversion source does not exist: {src}")
-
     target = target.lower().lstrip(".")
     if target not in {"docx", "pdf"}:
         raise FilesExtractError("Conversion target must be docx or pdf.")
     if opts.mode != "exact-layout":
         raise FilesExtractError("Editable reconstruction is not enabled in this build; use exact-layout.")
-
     dst.parent.mkdir(parents=True, exist_ok=True)
     suffix = src.suffix.lower()
 
@@ -80,5 +81,43 @@ def convert_document(source: str | Path, output: str | Path, *, target: str, opt
                 pdf = convert_office(src, "pdf", Path(temp), timeout=opts.libreoffice_timeout_seconds)
                 shutil.copy2(pdf, dst)
             return ConversionResult(src, dst, target, opts.mode)
-
     raise FilesExtractError(f"Unsupported conversion source: {src.name}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="files-convert", description="Layout-preserving document conversion.")
+    parser.add_argument("input", type=Path)
+    parser.add_argument("-o", "--output", type=Path, required=True)
+    parser.add_argument("--to", choices=("docx", "pdf"), required=True, dest="target")
+    parser.add_argument("--mode", choices=("exact-layout", "editable"), default="exact-layout")
+    parser.add_argument("--render-dpi", type=int, default=216)
+    parser.add_argument("--libreoffice-timeout", type=int, default=180)
+    parser.add_argument("--password")
+    args = parser.parse_args(argv)
+    try:
+        result = convert_document(
+            args.input,
+            args.output,
+            target=args.target,
+            options=ConversionOptions(
+                mode=args.mode,
+                render_dpi=args.render_dpi,
+                libreoffice_timeout_seconds=args.libreoffice_timeout,
+                password=args.password or os.environ.get("FILES_EXTRACT_PASSWORD"),
+            ),
+        )
+        print(f"Converted: {result.source}")
+        print(f"Target: {result.target} | Mode: {result.mode}")
+        if result.pages is not None:
+            print(f"Pages: {result.pages}")
+        print(f"Output: {result.output}")
+        for warning in result.warnings:
+            print(f"Warning: {warning}", file=sys.stderr)
+        return 0
+    except FilesExtractError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
